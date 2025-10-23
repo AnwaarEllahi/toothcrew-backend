@@ -1,4 +1,5 @@
 # main.py
+from xmlrpc.client import _datetime
 from fastapi.middleware.cors import CORSMiddleware
 
 from fastapi import FastAPI, Depends, HTTPException, status
@@ -15,7 +16,7 @@ from datetime import datetime
 from sqlalchemy import func
 from fastapi import Query
 from typing import cast
-
+from typing import Optional
 
 
 
@@ -24,20 +25,22 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Clinic Backend (FastAPI)")
 
-# CORS settings
+# ✅ CORS middleware - ONLY ADD ONCE!
 origins = [
-    "http://localhost:3000",  # React dev server
+    "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "http://192.168.18.144:3000",
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,  # allow only your frontend origins
+    allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],    # allow GET, POST, PUT, DELETE, etc.
-    allow_headers=["*"],    # allow any headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
+# Database session dependency
 def get_db():
     db = SessionLocal()
     try:
@@ -169,6 +172,7 @@ def create_patient(payload: schemas.PatientCreate, db: Session = Depends(get_db)
     doctor_id=payload.doctor_id,
     contact=payload.contact,
     age=payload.age,
+    date_of_birth=payload.date_of_birth,  # ✅ Use DOB
     medical_history=payload.medical_history,
     city=payload.city
 )
@@ -278,41 +282,107 @@ def todays_appointments(db: Session = Depends(get_db)):
 
 
 # ---------------- Doctors ----------------
+# @app.post("/doctors", response_model=DoctorOut, status_code=status.HTTP_201_CREATED)
+# def create_doctor(payload: DoctorCreate, db: Session = Depends(get_db),
+#                   current_user: models.User = Depends(require_role("admin"))):
+#     doctor = models.Doctor(name=payload.name, qualifications=payload.qualifications)
+#     db.add(doctor)
+#     db.commit()
+#     db.refresh(doctor)
+#     return doctor
+
+
+
+# @app.put("/doctors/{doctor_id}", response_model=schemas.DoctorOut)
+# def update_doctor(
+#     doctor_id: int,
+#     payload: schemas.DoctorCreate,
+#     db: Session = Depends(get_db),
+#     current_user: models.User = Depends(require_role("admin"))
+# ):
+#     doctor = db.query(models.Doctor).filter(models.Doctor.id == doctor_id).first()
+#     if not doctor:
+#         raise HTTPException(status_code=404, detail="Doctor not found")
+
+#     # Update fields
+#     doctor.name = payload.name  # type: ignore
+#     doctor.qualifications = payload.qualifications  # type: ignore
+
+#     db.commit()
+#     db.refresh(doctor)
+#     return doctor
+
+# @app.get("/doctors", response_model=List[DoctorOut])
+# def list_doctors(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+#     return db.query(models.Doctor).all()
+
+
+
+# Add this new endpoint for toggling doctor status
+@app.patch("/doctors/{doctor_id}", response_model=DoctorOut)
+def toggle_doctor_status(
+    doctor_id: int,
+    payload: dict,  # Receives {"is_disabled": true/false}
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_role("admin")),
+):
+    doctor = db.query(models.Doctor).filter(models.Doctor.id == doctor_id).first()
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+    
+    if "is_disabled" in payload:
+        doctor.is_disabled = payload["is_disabled"]
+    
+    db.commit()
+    db.refresh(doctor)
+    return doctor
+
+# Your existing endpoints remain the same
 @app.post("/doctors", response_model=DoctorOut, status_code=status.HTTP_201_CREATED)
-def create_doctor(payload: DoctorCreate, db: Session = Depends(get_db),
-                  current_user: models.User = Depends(require_role("admin"))):
-    doctor = models.Doctor(name=payload.name, qualifications=payload.qualifications)
+def create_doctor(
+    payload: DoctorCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_role("admin")),
+):
+    doctor = models.Doctor(
+        name=payload.name,
+        qualifications=payload.qualifications,
+        pmdc_no=payload.pmdc_no,
+        cnic=payload.cnic,
+        is_disabled=payload.is_disabled or False,
+    )
     db.add(doctor)
     db.commit()
     db.refresh(doctor)
     return doctor
 
-
-
-@app.put("/doctors/{doctor_id}", response_model=schemas.DoctorOut)
+@app.put("/doctors/{doctor_id}", response_model=DoctorOut)
 def update_doctor(
     doctor_id: int,
-    payload: schemas.DoctorCreate,
+    payload: DoctorCreate,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(require_role("admin"))
+    current_user: models.User = Depends(require_role("admin")),
 ):
     doctor = db.query(models.Doctor).filter(models.Doctor.id == doctor_id).first()
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
-
-    # Update fields
-    doctor.name = payload.name  # type: ignore
-    doctor.qualifications = payload.qualifications  # type: ignore
-
+    
+    doctor.name = payload.name
+    doctor.qualifications = payload.qualifications
+    doctor.pmdc_no = payload.pmdc_no
+    doctor.cnic = payload.cnic
+    doctor.is_disabled = payload.is_disabled or False
+    
     db.commit()
     db.refresh(doctor)
     return doctor
 
 @app.get("/doctors", response_model=List[DoctorOut])
-def list_doctors(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+def list_doctors(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
     return db.query(models.Doctor).all()
-
-
 
 # ---------------- Expenses ----------------
 
@@ -325,6 +395,8 @@ def create_expense(payload: ExpenseCreate, db: Session = Depends(get_db),
         amount=payload.amount,
         category=payload.category,
         description=payload.description,
+        source=payload.source,  # ✅ Include this line
+
     )
     db.add(expense)
     db.commit()
@@ -332,11 +404,40 @@ def create_expense(payload: ExpenseCreate, db: Session = Depends(get_db),
     return expense
 
 
+# @app.get("/expenses", response_model=List[ExpenseOut])
+# def list_expenses(db: Session = Depends(get_db),
+#                   current_user: models.User = Depends(get_current_user)):
+#     expenses = db.query(models.Expense).order_by(models.Expense.date.desc()).all()
+#     return expenses
+
+import datetime as dt  # ✅ one import, use dt.datetime everywhere
+
 @app.get("/expenses", response_model=List[ExpenseOut])
-def list_expenses(db: Session = Depends(get_db),
-                  current_user: models.User = Depends(get_current_user)):
-    expenses = db.query(models.Expense).order_by(models.Expense.date.desc()).all()
-    return expenses
+def list_expenses(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+    month: Optional[int] = Query(None, ge=1, le=12),
+    year: Optional[int] = Query(None, ge=2000, le=2100),
+    source: Optional[str] = Query(None),
+):
+    q = db.query(models.Expense)
+
+    if source:
+        q = q.filter(models.Expense.source == source)
+
+    if month and year:
+        start = dt.datetime(year, month, 1)
+        # next month
+        next_month_year = year + (1 if month == 12 else 0)
+        next_month = 1 if month == 12 else month + 1
+        end = dt.datetime(next_month_year, next_month, 1)
+        q = q.filter(models.Expense.date >= start, models.Expense.date < end)
+    elif year:
+        start = dt.datetime(year, 1, 1)
+        end = dt.datetime(year + 1, 1, 1)
+        q = q.filter(models.Expense.date >= start, models.Expense.date < end)
+
+    return q.order_by(models.Expense.date.desc()).all()
 
 
 @app.delete("/expenses/{expense_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -348,6 +449,18 @@ def delete_expense(expense_id: int, db: Session = Depends(get_db),
     db.delete(expense)
     db.commit()
     return
+
+# @app.put("/expenses/{expense_id}", response_model=ExpenseOut)
+# def update_expense(expense_id: int, payload: ExpenseCreate, db: Session = Depends(get_db)):
+#     expense = db.query(models.Expense).filter(models.Expense.id == expense_id).first()
+#     if not expense:
+#         raise HTTPException(status_code=404, detail="Expense not found")
+#     for key, value in payload.dict().items():
+#         setattr(expense, key, value)
+#     db.commit()
+#     db.refresh(expense)
+#     return expense
+
 
 
 # ---------------- Inventory ----------------
@@ -387,16 +500,27 @@ def delete_inventory(inventory_id: int, db: Session = Depends(get_db),
     return
 
 @app.post("/inventory", response_model=InventoryOut, status_code=status.HTTP_201_CREATED)
-def create_inventory(payload: InventoryCreate, db: Session = Depends(get_db),
+def create_inventory(payload: InventoryCreate,
+                     db: Session = Depends(get_db),
                      current_user: models.User = Depends(get_current_user)):
+
+    # Automatically get current date and time
+    now = datetime.now()
+
+    # If remaining_amount not sent, calculate it
+    remaining = payload.amount - (payload.paid_amount or 0)
+
     inventory = models.Inventory(
         supplier=payload.supplier,
-        invoice=payload.invoice,  # ADD THIS LINE
+        invoice=payload.invoice,
         amount=payload.amount,
+        paid_amount=payload.paid_amount or 0,        # store paid_amount
+        remaining_amount=remaining if remaining >= 0 else 0,  # store remaining_amount
         description=payload.description,
-        date=payload.date,
-        time=payload.time
+        date=now.date().isoformat(),
+        time=now.strftime("%H:%M:%S")
     )
+
     db.add(inventory)
     db.commit()
     db.refresh(inventory)
@@ -501,6 +625,223 @@ def create_inventory(payload: InventoryCreate, db: Session = Depends(get_db),
 #     db.delete(s)
 #     db.commit()
 #     return
+
+
+
+ #.......services.........
+
+# --- Categories ---
+@app.post("/categories", response_model=schemas.CategoryOut, status_code=status.HTTP_201_CREATED)
+def create_category(payload: schemas.CategoryCreate, db: Session = Depends(get_db),
+                    current_user: models.User = Depends(require_role("admin"))):
+    existing = db.query(models.Category).filter(func.lower(models.Category.name) == payload.name.lower()).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Category already exists")
+    c = models.Category(name=payload.name)
+    db.add(c)
+    db.commit()
+    db.refresh(c)
+    return c
+
+@app.get("/categories", response_model=List[schemas.CategoryOut])
+def list_categories(db: Session = Depends(get_db)):
+    return db.query(models.Category).order_by(models.Category.name).all()
+
+@app.delete("/categories/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_category(category_id: int, db: Session = Depends(get_db),
+                    current_user: models.User = Depends(require_role("admin"))):
+    cat = db.query(models.Category).filter(models.Category.id == category_id).first()
+    if not cat:
+        raise HTTPException(status_code=404, detail="Category not found")
+    db.delete(cat)
+    db.commit()
+    return
+
+
+# # # --- Services ---
+@app.post("/services", response_model=schemas.ServiceOut, status_code=status.HTTP_201_CREATED)
+def create_service(payload: schemas.ServiceCreate, db: Session = Depends(get_db),
+                   current_user: models.User = Depends(require_role("admin", "receptionist"))):
+    # ensure category exists
+    cat = db.query(models.Category).filter(models.Category.id == payload.category_id).first()
+    if not cat:
+        raise HTTPException(status_code=404, detail="Category not found")
+    s = models.Service(
+        name=payload.name,
+        price_amount=payload.price_amount,
+        price_text=payload.price_text,
+        currency=payload.currency or "PKR",
+        category_id=payload.category_id,
+        is_active=True
+    )
+    db.add(s)
+    db.commit()
+    db.refresh(s)
+    return s
+
+@app.get("/services", response_model=List[schemas.ServiceOut])
+def list_services(db: Session = Depends(get_db),
+                  category_id: Optional[int] = Query(None, description="Filter by category id"),
+                  active: Optional[bool] = Query(None),
+                  q: Optional[str] = Query(None, description="search by name")):
+    query = db.query(models.Service)
+    if category_id:
+        query = query.filter(models.Service.category_id == category_id)
+    if active is not None:
+        query = query.filter(models.Service.is_active == active)
+    if q:
+        query = query.filter(models.Service.name.ilike(f"%{q}%"))
+    return query.order_by(models.Service.name).all()
+
+@app.put("/services/{service_id}", response_model=schemas.ServiceOut)
+def update_service(service_id: int, payload: schemas.ServiceUpdate, db: Session = Depends(get_db),
+                   current_user: models.User = Depends(require_role("admin", "receptionist"))):
+    s = db.query(models.Service).filter(models.Service.id == service_id).first()
+    if not s:
+        raise HTTPException(status_code=404, detail="Service not found")
+    update_data = payload.dict(exclude_unset=True)
+    for k, v in update_data.items():
+        setattr(s, k, v)
+    db.commit()
+    db.refresh(s)
+    return s
+
+@app.patch("/services/{service_id}/toggle_active", response_model=schemas.ServiceOut)
+def toggle_service(
+    service_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_role("admin", "receptionist"))
+):
+    s = db.query(models.Service).filter(models.Service.id == service_id).first()
+    if not s:
+        raise HTTPException(status_code=404, detail="Service not found")
+    s.is_active = not bool(s.is_active)
+    db.commit()
+    db.refresh(s)
+    return s
+
+
+@app.delete("/services/{service_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_service(service_id: int, db: Session = Depends(get_db),
+                   current_user: models.User = Depends(require_role("admin"))):
+    s = db.query(models.Service).filter(models.Service.id == service_id).first()
+    if not s:
+        raise HTTPException(status_code=404, detail="Service not found")
+    db.delete(s)
+    db.commit()
+    return
+
+
+
+
+# ---------------- Invoices ----------------
+
+@app.post("/invoices", response_model=schemas.InvoiceOut, status_code=status.HTTP_201_CREATED)
+def create_invoice(payload: schemas.InvoiceCreate, db: Session = Depends(get_db),
+                   current_user: models.User = Depends(get_current_user)):
+    
+    # Create invoice
+    invoice = models.Invoice(
+        invoice_no=payload.invoice_no,
+        patient_id=payload.patient_id,
+        doctor_id=payload.doctor_id,
+        patient_name=payload.patient_name,
+        patient_age=payload.patient_age,
+        patient_contact=payload.patient_contact,
+        doctor_name=payload.doctor_name,
+        date=payload.date,
+        due_date=payload.due_date,
+        diagnosis=payload.diagnosis,
+        subtotal=payload.subtotal,
+        invoice_discount=payload.invoice_discount,
+        amount_due=payload.amount_due,
+        paid_amount=payload.paid_amount,
+        status=payload.status,
+        note=payload.note
+    )
+    
+    db.add(invoice)
+    db.flush()  # Get the invoice ID
+    
+    # Create treatments
+    for treatment_data in payload.treatments:
+        treatment = models.InvoiceTreatment(
+            invoice_id=invoice.id,
+            procedure=treatment_data.procedure,
+            quantity=treatment_data.quantity,
+            unit_price=treatment_data.unit_price,
+            discount=treatment_data.discount,
+            total=treatment_data.total
+        )
+        db.add(treatment)
+    
+    db.commit()
+    db.refresh(invoice)
+    return invoice
+
+
+@app.get("/invoices", response_model=List[schemas.InvoiceOut])
+def list_invoices(db: Session = Depends(get_db),
+                  current_user: models.User = Depends(get_current_user),
+                  patient_id: int = Query(None, description="Filter by patient ID"),
+                  status: str = Query(None, description="Filter by status")):
+    query = db.query(models.Invoice).order_by(models.Invoice.created_at.desc())
+    
+    if patient_id:
+        query = query.filter(models.Invoice.patient_id == patient_id)
+    if status:
+        query = query.filter(models.Invoice.status == status)
+    
+    invoices = query.all()
+    return invoices
+
+
+@app.get("/invoices/{invoice_id}", response_model=schemas.InvoiceOut)
+def get_invoice(invoice_id: int, db: Session = Depends(get_db),
+                current_user: models.User = Depends(get_current_user)):
+    invoice = db.query(models.Invoice).filter(models.Invoice.id == invoice_id).first()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    return invoice
+
+
+@app.get("/invoices/number/{invoice_no}", response_model=schemas.InvoiceOut)
+def get_invoice_by_number(invoice_no: str, db: Session = Depends(get_db),
+                          current_user: models.User = Depends(get_current_user)):
+    invoice = db.query(models.Invoice).filter(models.Invoice.invoice_no == invoice_no).first()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    return invoice
+
+
+@app.patch("/invoices/{invoice_id}", response_model=schemas.InvoiceOut)
+def update_invoice(invoice_id: int, payload: schemas.InvoiceUpdate, 
+                   db: Session = Depends(get_db),
+                   current_user: models.User = Depends(get_current_user)):
+    invoice = db.query(models.Invoice).filter(models.Invoice.id == invoice_id).first()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    
+    # Update only provided fields
+    update_data = payload.dict(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(invoice, key, value)
+    
+    db.commit()
+    db.refresh(invoice)
+    return invoice
+
+
+@app.delete("/invoices/{invoice_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_invoice(invoice_id: int, db: Session = Depends(get_db),
+                   current_user: models.User = Depends(require_role("admin"))):
+    invoice = db.query(models.Invoice).filter(models.Invoice.id == invoice_id).first()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    db.delete(invoice)
+    db.commit()
+    return
+
 
 @app.get("/")
 def read_root():
