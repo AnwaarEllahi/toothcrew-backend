@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from datetime import datetime, date
-from typing import List
+from typing import Dict, List
 import models, schemas
 from database import engine, Base, SessionLocal
 from auth import hash_password, verify_password, create_access_token, get_current_user, require_role
@@ -13,40 +13,39 @@ from fastapi.security import OAuth2PasswordRequestForm
 
 from schemas import DoctorCreate, DoctorOut, ExpenseCreate, ExpenseOut, InventoryCreate, InventoryOut
 from datetime import datetime
-from sqlalchemy import func
+from sqlalchemy import Tuple, extract, func, select
 from fastapi import Query
 from typing import cast
 from typing import Optional
+from sqlalchemy import func
 
 
 
 # create tables
 Base.metadata.create_all(bind=engine)
 
+# ✅ Create FastAPI app at the top
 app = FastAPI(title="Clinic Backend (FastAPI)")
 
-# ✅ CORS middleware - ONLY ADD ONCE!
-origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://192.168.18.144:3000",
-]
 
+# ✅ CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Database session dependency
+
+# ✅ Database session dependency
 def get_db():
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
+
 
 # ---------------- Auth ----------------
 @app.post("/register", response_model=schemas.UserOut, status_code=status.HTTP_201_CREATED)
@@ -164,23 +163,79 @@ def dashboard(current_user: models.User = Depends(get_current_user), db: Session
 
 
 # ---------------- Patients ----------------
-@app.post("/patients", response_model=schemas.PatientOut, status_code=status.HTTP_201_CREATED)
-def create_patient(payload: schemas.PatientCreate, db: Session = Depends(get_db),
-                   current_user: models.User = Depends(require_role("admin", "receptionist", "doctor"))):
-    patient = models.Patient(
-    name=payload.name,
-    doctor_id=payload.doctor_id,
-    contact=payload.contact,
-    age=payload.age,
-    date_of_birth=payload.date_of_birth,  # ✅ Use DOB
-    medical_history=payload.medical_history,
-    city=payload.city
-)
+# @app.post("/patients", response_model=schemas.PatientOut, status_code=status.HTTP_201_CREATED)
+# def create_patient(
+#     payload: schemas.PatientCreate,
+#     db: Session = Depends(get_db),
+#     current_user: models.User = Depends(require_role("admin", "receptionist", "doctor"))
+# ):
+#     doctor_id = payload.doctor_id
 
+#    # If frontend sends doctor_name, find doctor_id automatically
+#     if not doctor_id and payload.doctor_name:
+#         doctor = db.query(models.User).filter(models.User.name == payload.doctor_name).first()
+#         if doctor:
+#             doctor_id = doctor.id
+#         else:
+#             raise HTTPException(status_code=404, detail=f"Doctor '{payload.doctor_name}' not found")
+   
+
+
+#     patient = models.Patient(
+#         name=payload.name,
+#         doctor_id=doctor_id,
+#         contact=payload.contact,
+#         date_of_birth=payload.date_of_birth,
+#         medical_history=payload.medical_history,
+#         city=payload.city,
+#     )
+
+#     db.add(patient)
+#     db.commit()
+#     db.refresh(patient)
+#     return patient
+
+
+@app.post("/patients", response_model=schemas.PatientOut, status_code=status.HTTP_201_CREATED)
+def create_patient(
+    payload: schemas.PatientCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_role("admin", "receptionist", "doctor"))
+):
+    # prefer explicit doctor_id, but allow resolving from doctor_name (doctors table)
+    doctor_id = payload.doctor_id
+    print("Received doctor_id:", doctor_id)
+    # If frontend sent doctor_name (and not doctor_id), resolve it from the Doctor table
+    doctor_name = getattr(payload, "doctor_name", None)
+    if doctor_id is None and doctor_name:
+        doctor = db.query(models.Doctor).filter(models.Doctor.name == doctor_name).first()
+        if not doctor:
+            raise HTTPException(status_code=404, detail=f"Doctor '{doctor_name}' not found")
+        doctor_id = doctor.id
+
+    # if a doctor_id was provided, validate it exists in doctors table
+    if doctor_id is not None:
+        exists = db.query(models.Doctor).filter(models.Doctor.id == doctor_id).first()
+        if not exists:
+            raise HTTPException(status_code=422, detail=f"doctor_id {doctor_id} does not exist")
+    print(exists.__dict__)
+    patient = models.Patient(
+        name=payload.name,
+        doctor_id=doctor_id,                    # FK or None (from doctors table)
+        contact=payload.contact,
+        date_of_birth=payload.date_of_birth,
+        medical_history=payload.medical_history,
+        city=payload.city,
+    )
     db.add(patient)
     db.commit()
     db.refresh(patient)
-    return patient
+    return schemas.PatientOut.model_validate(patient, from_attributes=True).model_copy(
+    update={"doctor_name": exists.name if exists else None}
+    )
+
+
+
 
 # @app.get("/patients", response_model=List[schemas.PatientOut])
 # def list_patients(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -199,29 +254,183 @@ def create_patient(payload: schemas.PatientCreate, db: Session = Depends(get_db)
 
 
 
+# @app.get("/patients", response_model=List[schemas.PatientOut])
+# def list_patients(
+#     db: Session = Depends(get_db),
+#     month: int = Query(None, ge=1, le=12, description="Filter by month"),
+#     year: int = Query(None, ge=1900, le=2100, description="Filter by year")
+# ):
+#     query = db.query(models.Patient)
 
-@app.get("/patients", response_model=List[schemas.PatientOut])
+#     if month and year:
+#         query = query.filter(
+#             func.extract('month', models.Patient.created_at) == month,
+#             func.extract('year', models.Patient.created_at) == year
+#         )
+#     elif month:
+#         query = query.filter(func.extract('month', models.Patient.created_at) == month)
+#     elif year:
+#         query = query.filter(func.extract('year', models.Patient.created_at) == year)
+
+#     patients = query.all()
+
+#     patients_with_doctor = []
+#     for p in patients:
+#         doctor_name = p.owner_doctor.name if p.owner_doctor else None
+#         patient_dict = schemas.PatientOut.from_orm(p).dict()
+#         patient_dict["doctor_name"] = doctor_name
+
+#         # 🧩 Optionally hide doctor_id from frontend
+#         if "doctor_id" in patient_dict:
+#             del patient_dict["doctor_id"]
+
+#         patients_with_doctor.append(patient_dict)
+
+#     return patients_with_doctor
+
+
+# @app.get("/patients", response_model=list[schemas.PatientOut])
+# def list_patients(db: Session = Depends(get_db)):
+#     patients = db.query(models.Patient).all()
+#     today = date.today()
+#     patient_list = []
+
+#     for patient in patients:
+#         dob_value = patient.date_of_birth   # coming from database
+#         age = None
+
+#         if dob_value is not None:
+#             # Convert string to date if needed
+#             if isinstance(dob_value, str):
+#                 try:
+#                     dob_date = datetime.strptime(dob_value, "%Y-%m-%d").date()
+#                 except ValueError:
+#                     # If the format is different, adjust "%Y-%m-%d" accordingly
+#                     dob_date = None
+#             else:
+#                 dob_date = dob_value  # already a date object
+
+#             if dob_date is not None:
+#                 # Calculate age
+#                 age = today.year - dob_date.year - ((today.month, today.day) < (dob_date.month, dob_date.day))
+#         if patient.owner_doctor is not None:
+#             print("patient.owner_doctor", patient.owner_doctor.__dict__)            
+#             print("owner_doctor", patient.__dict__)
+
+#         patient_list.append({
+#             "id": patient.id,
+#             "name": patient.name,
+#             "contact": patient.contact,
+#             "date_of_birth": dob_date,
+#             "age": age,
+#             "medical_history": patient.medical_history,
+#             "city": patient.city,
+#             "doctor_id": patient.doctor_id,
+#             "doctor_name": patient.owner_doctor if patient.owner_doctor else None,
+#             "date": patient.created_at
+#         })
+
+#     return patient_list
+
+# @app.get("/patients", response_model=list[schemas.PatientOut])
+# def list_patients(db: Session = Depends(get_db)):
+#     patients = db.query(models.Patient).all()
+#     today = date.today()
+#     patient_list = []
+
+#     for patient in patients:
+#         dob_value = patient.date_of_birth   # coming from database
+#         age = None
+
+#         if dob_value is not None:
+#             # Convert string to date if needed
+#             if isinstance(dob_value, str):
+#                 try:
+#                     dob_date = datetime.strptime(dob_value, "%Y-%m-%d").date()
+#                 except ValueError:
+#                     # If the format is different, adjust "%Y-%m-%d" accordingly
+#                     dob_date = None
+#             else:
+#                 dob_date = dob_value  # already a date object
+
+#             if dob_date is not None:
+#                 # Calculate age
+#                 age = today.year - dob_date.year - ((today.month, today.day) < (dob_date.month, dob_date.day))
+
+#         # ✅ FIX: Extract the doctor name properly
+#         doctor_name = None
+#         if patient.owner_doctor is not None:
+#             doctor_name = patient.owner_doctor.name
+
+#         patient_list.append({
+#             "id": patient.id,
+#             "name": patient.name,
+#             "contact": patient.contact,
+#             "date_of_birth": dob_date,
+#             "age": age,
+#             "medical_history": patient.medical_history,
+#             "city": patient.city,
+#             "doctor_id": patient.doctor_id,
+#             "doctor_name": doctor_name,  # ✅ Now correctly returns just the name string
+#             "created_at": patient.created_at
+#         })
+
+#     return patient_list
+
+@app.get("/patients", response_model=list[schemas.PatientOut])
 def list_patients(
-    db: Session = Depends(get_db),
-    month: int = Query(None, ge=1, le=12, description="Filter by month"),
-    year: int = Query(None, ge=1900, le=2100, description="Filter by year")
+    month: int | None = Query(None),
+    year: int | None = Query(None),
+    db: Session = Depends(get_db)
 ):
     query = db.query(models.Patient)
 
     if month and year:
         query = query.filter(
-            func.extract('month', models.Patient.created_at) == month,
-            func.extract('year', models.Patient.created_at) == year
+            extract("month", models.Patient.created_at) == month,
+            extract("year", models.Patient.created_at) == year
         )
-    elif month:
-        query = query.filter(func.extract('month', models.Patient.created_at) == month)
-    elif year:
-        query = query.filter(func.extract('year', models.Patient.created_at) == year)
 
     patients = query.all()
-    return patients
+    today = date.today()
+    patient_list = []
 
+    for patient in patients:
+        dob_value = patient.date_of_birth
+        age = None
 
+        if dob_value is not None:
+            if isinstance(dob_value, str):
+                try:
+                    dob_date = datetime.strptime(dob_value, "%Y-%m-%d").date()
+                except ValueError:
+                    dob_date = None
+            else:
+                dob_date = dob_value
+
+            if dob_date is not None:
+                age = today.year - dob_date.year - (
+                    (today.month, today.day) < (dob_date.month, dob_date.day)
+                )
+
+        doctor_name = None
+        if patient.owner_doctor is not None:
+            doctor_name = patient.owner_doctor.name
+
+        patient_list.append({
+            "id": patient.id,
+            "name": patient.name,
+            "contact": patient.contact,
+            "date_of_birth": dob_date,
+            "age": age,
+            "medical_history": patient.medical_history,
+            "city": patient.city,
+            "doctor_id": patient.doctor_id,
+            "doctor_name": doctor_name,
+            "created_at": patient.created_at
+        })
+
+    return patient_list
 
 @app.put("/patients/{patient_id}", response_model=schemas.PatientOut)
 def update_patient(patient_id: int, payload: schemas.PatientUpdate, db: Session = Depends(get_db),
@@ -240,39 +449,309 @@ def update_patient(patient_id: int, payload: schemas.PatientUpdate, db: Session 
     return patient
 
 
+# app = FastAPI()
 
+@app.delete("/patients/{patient_id}")
+def delete_patient(patient_id: int, db: Session = Depends(get_db)):
+    patient = db.query(models.Patient).filter(models.Patient.id == patient_id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    db.delete(patient)
+    db.commit()
+    return {"message": "Patient deleted successfully"}
 
 # ---------------- Appointments ----------------
+# @app.post("/appointments", response_model=schemas.AppointmentOut, status_code=status.HTTP_201_CREATED)
+# def create_appointment(payload: schemas.AppointmentCreate, db: Session = Depends(get_db),
+#                        current_user: models.User = Depends(require_role("admin", "receptionist"))):
+#     appointment = models.Appointment(
+#         patient_id=int(payload.patient_id),
+#         doctor_id=int(payload.doctor_id),
+#         appointment_datetime=payload.appointment_datetime,
+#         status=payload.status,
+#         notes=payload.notes
+#     )
+#     db.add(appointment)
+#     db.commit()
+#     db.refresh(appointment)
+#     return appointment
+
+
+# @app.post("/appointments", response_model=schemas.AppointmentOut)
+# def create_appointment(payload: schemas.AppointmentCreate, db: Session = Depends(get_db)):
+#     appt = models.Appointment(
+#         patient_name=payload.patient_name,                  # free text
+#         doctor_id=payload.doctor_id,
+#         appointment_datetime=payload.appointment_datetime,
+#         status=payload.status,
+#         notes=payload.notes,
+#     )
+#     db.add(appt)
+#     db.commit()
+#     db.refresh(appt)
+
+#     # fetch the doctor INSTANCE, then use its .name (a str), not the Column
+#     doctor = db.query(models.User).filter(models.User.id == appt.doctor_id).first()
+
+#     # build response without mutating fields with Column types
+#     out = schemas.AppointmentOut.model_validate(appt, from_attributes=True).model_copy(
+#         update={"doctor_name": doctor.name if doctor else None}
+#     )
+#     return out
+
+
+    # out = schemas.AppointmentOut.from_orm(appointment)
+    # out.patient_name = appointment.patient.name if appointment.patient else None
+    # return out
+
+
+
+# @app.get("/appointments", response_model=List[schemas.AppointmentOut])
+# def list_appointments(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+#     if (getattr(current_user, "role", "") or "").lower() == "doctor":
+#         appts = db.query(models.Appointment).filter(models.Appointment.doctor_id == int(getattr(current_user, "id"))).all()
+#     else:
+#         appts = db.query(models.Appointment).all()
+#     return appts
+
+# @app.get("/appointments", response_model=List[schemas.AppointmentOut])
+# def list_appointments(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+#     if (getattr(current_user, "role", "") or "").lower() == "doctor":
+#         appts = db.query(models.Appointment).filter(models.Appointment.doctor_id == int(getattr(current_user, "id"))).all()
+#     else:
+#         appts = db.query(models.Appointment).all()
+
+
+#     result = []
+#     for a in appts:
+#     data = schemas.AppointmentOut.model_validate(a, from_attributes=True)
+#     data.patient_name = a.patient.name if a.patient else None
+#     result.append(data)
+#     return result
+
+    # attach patient_name to each
+    # result = []
+    # for a in appts:
+    #     patient_name = a.patient.name if a.patient else None
+    #     data = schemas.AppointmentOut.from_orm(a)
+    #     data.patient_name = patient_name
+    #     result.append(data)
+    # return result
+
+
+
+# @app.get("/appointments", response_model=List[schemas.AppointmentOut])
+# def list_appointments(db: Session = Depends(get_db),
+#                       current_user: models.User = Depends(get_current_user)):
+#     if (getattr(current_user, "role", "") or "").lower() == "doctor":
+#         appts = db.query(models.Appointment).filter(
+#             models.Appointment.doctor_id == int(getattr(current_user, "id"))
+#         ).all()
+#     else:
+#         appts = db.query(models.Appointment).all()
+
+#     result = []
+#     for a in appts:
+#         data = schemas.AppointmentOut.model_validate(a, from_attributes=True)
+#         data.patient_name = a.patient.name if a.patient else None
+#         data.doctor_name = a.doctor.name if a.doctor else None
+#         result.append(data)
+
+#     return result
+
+
+# @app.get("/appointments", response_model=list[schemas.AppointmentOut])
+# def list_appointments(db: Session = Depends(get_db)):
+#     appts = db.query(models.Appointment).all()
+#     # prefetch doctor names
+#     doctors = {u.id: u.name for u in db.query(models.User).all()}
+
+#     result: list[schemas.AppointmentOut] = []
+#     for a in appts:
+#         result.append(
+#             schemas.AppointmentOut.model_validate(a, from_attributes=True).model_copy(
+#                 update={"doctor_name": doctors.get(a.doctor_id)}
+#             )
+#         )
+#     return result
+
+# ---------------- Appointments (fix create + list uses Doctor, not User) ----------------
+from sqlalchemy.exc import IntegrityError
+# -------------------- CREATE APPOINTMENT --------------------
 @app.post("/appointments", response_model=schemas.AppointmentOut, status_code=status.HTTP_201_CREATED)
-def create_appointment(payload: schemas.AppointmentCreate, db: Session = Depends(get_db),
-                       current_user: models.User = Depends(require_role("admin", "receptionist"))):
-    appointment = models.Appointment(
-        patient_id=int(payload.patient_id),
-        doctor_id=int(payload.doctor_id),
+def create_appointment(
+    payload: schemas.AppointmentCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_role("admin", "receptionist"))
+):
+    # ✅ Prevent double booking
+    clash = db.query(models.Appointment).filter(
+        models.Appointment.doctor_id == payload.doctor_id,
+        models.Appointment.appointment_datetime == payload.appointment_datetime
+    ).first()
+    if clash:
+        raise HTTPException(status_code=409, detail="Slot already booked for this doctor at that time.")
+
+    # ✅ Determine patient ID and name
+    patient_id = payload.patient_id
+    patient_name = payload.patient_name
+
+    # If only patient_id is given, fetch the name from patients table
+    if patient_id and not patient_name:
+        patient = db.query(models.Patient).filter(models.Patient.id == patient_id).first()
+        if not patient:
+            raise HTTPException(status_code=404, detail="Patient not found")
+        patient_name = patient.name
+
+    # ✅ Create appointment
+    appt = models.Appointment(
+        patient_id=patient_id,
+        patient_name=patient_name,
+        doctor_id=payload.doctor_id,
         appointment_datetime=payload.appointment_datetime,
         status=payload.status,
-        notes=payload.notes
+        notes=payload.notes,
     )
-    db.add(appointment)
-    db.commit()
-    db.refresh(appointment)
-    return appointment
 
-@app.get("/appointments", response_model=List[schemas.AppointmentOut])
-def list_appointments(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    if (getattr(current_user, "role", "") or "").lower() == "doctor":
-        appts = db.query(models.Appointment).filter(models.Appointment.doctor_id == int(getattr(current_user, "id"))).all()
-    else:
-        appts = db.query(models.Appointment).all()
-    return appts
+    db.add(appt)
+    
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Slot already booked for this doctor at that time.")
+    db.refresh(appt)
 
+    # ✅ Fetch doctor name
+    doctor = db.query(models.Doctor).filter(models.Doctor.id == appt.doctor_id).first()
+    # print("Doctor:", doctor)
+    # print("Appointment:", appt)
+    # print("Doctor name to update:", doctor.name if doctor else None)
+    return schemas.AppointmentOut.model_validate(appt, from_attributes=True).model_copy(
+        update={"doctor_name": doctor.name if doctor else None}
+    )
+    # appt_out = schemas.AppointmentOut.model_validate(appt, from_attributes=True)
+    # appt.doctor_name = doctor.name if doctor else None
+    # print(appt)
+    # return appt
+
+
+
+
+# -------------------- LIST APPOINTMENTS --------------------
+@app.get("/appointments", response_model=list[schemas.AppointmentOut])
+def list_appointments(db: Session = Depends(get_db),
+                      current_user: models.User = Depends(get_current_user)):
+    rows = (
+        db.execute(
+            select(
+                models.Appointment,
+                models.Doctor.name.label("doctor_name"),
+            ).join(models.Doctor, models.Appointment.doctor_id == models.Doctor.id, isouter=True)
+             .order_by(models.Appointment.appointment_datetime.asc())
+        ).all()
+    )
+
+    out: List[schemas.AppointmentOut] = []
+    for appt, doctor_name in rows:
+        out.append(
+            schemas.AppointmentOut.model_validate(appt, from_attributes=True).model_copy(
+                update={"doctor_name": doctor_name}
+            )
+        )
+    return out
+# -------------------- UPDATE APPOINTMENT --------------------
+@app.put("/appointments/{appointment_id}", response_model=schemas.AppointmentOut)
+def update_appointment(
+    appointment_id: int,
+    payload: schemas.AppointmentUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_role("admin", "receptionist"))
+):
+    appt = db.query(models.Appointment).filter(models.Appointment.id == appointment_id).first()
+    if not appt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+
+    data = payload.dict(exclude_unset=True)
+    new_doctor_id = int(data.get("doctor_id", appt.doctor_id))
+    new_dt = data.get("appointment_datetime", appt.appointment_datetime)
+
+    clash = db.query(models.Appointment).filter(
+        models.Appointment.doctor_id == new_doctor_id,
+        models.Appointment.appointment_datetime == new_dt,
+        models.Appointment.id != appointment_id,
+    ).first()
+    if clash:
+        raise HTTPException(status_code=409, detail="Slot already booked for this doctor at that time.")
+
+    for k, v in data.items():
+        setattr(appt, k, v)
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Slot already booked for this doctor at that time.")
+    db.refresh(appt)
+
+    doctor = db.query(models.Doctor).filter(models.Doctor.id == appt.doctor_id).first()
+    return schemas.AppointmentOut.model_validate(appt, from_attributes=True).model_copy(
+        update={"doctor_name": doctor.name if doctor else None}
+    )
+
+
+
+
+# -------------------- PARTIAL UPDATE --------------------
+@app.patch("/appointments/{appointment_id}", response_model=schemas.AppointmentOut)
+def partial_update_appointment(
+    appointment_id: int,
+    payload: schemas.AppointmentUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_role("admin", "receptionist", "doctor"))
+):
+    appt = db.query(models.Appointment).filter(models.Appointment.id == appointment_id).first()
+    if not appt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+
+    data = payload.dict(exclude_unset=True)
+    new_doctor_id = int(data.get("doctor_id", appt.doctor_id))
+    new_dt = data.get("appointment_datetime", appt.appointment_datetime)
+
+    clash = db.query(models.Appointment).filter(
+        models.Appointment.doctor_id == new_doctor_id,
+        models.Appointment.appointment_datetime == new_dt,
+        models.Appointment.id != appointment_id,
+    ).first()
+    if clash:
+        raise HTTPException(status_code=409, detail="Slot already booked for this doctor at that time.")
+
+    for k, v in data.items():
+        setattr(appt, k, v)
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Slot already booked for this doctor at that time.")
+    db.refresh(appt)
+
+    doctor = db.query(models.Doctor).filter(models.Doctor.id == appt.doctor_id).first()
+    return schemas.AppointmentOut.model_validate(appt, from_attributes=True).model_copy(
+        update={"doctor_name": doctor.name if doctor else None}
+    )
+
+
+
+
+
+# -------------------- TODAY’S APPOINTMENTS --------------------
 @app.get("/appointments/today")
 def todays_appointments(db: Session = Depends(get_db)):
     today = date.today()
     start = datetime.combine(today, datetime.min.time())
     end = datetime.combine(today, datetime.max.time())
 
-    # Get today's appointments
     appointments = db.query(models.Appointment).filter(
         models.Appointment.appointment_datetime >= start,
         models.Appointment.appointment_datetime <= end
@@ -383,6 +862,22 @@ def list_doctors(
     current_user: models.User = Depends(get_current_user)
 ):
     return db.query(models.Doctor).all()
+
+
+@app.get("/doctors/{doctor_id}")
+def get_doctor_by_id(
+    doctor_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    doctor = db.query(models.Doctor).filter(models.Doctor.id == doctor_id).first()
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+    return {
+        "id": doctor.id,
+        "name": doctor.name,
+        "qualifications": doctor.qualifications
+    }
 
 # ---------------- Expenses ----------------
 
@@ -735,7 +1230,6 @@ def delete_service(service_id: int, db: Session = Depends(get_db),
 
 
 # ---------------- Invoices ----------------
-
 @app.post("/invoices", response_model=schemas.InvoiceOut, status_code=status.HTTP_201_CREATED)
 def create_invoice(payload: schemas.InvoiceCreate, db: Session = Depends(get_db),
                    current_user: models.User = Depends(get_current_user)):
@@ -750,14 +1244,10 @@ def create_invoice(payload: schemas.InvoiceCreate, db: Session = Depends(get_db)
         patient_contact=payload.patient_contact,
         doctor_name=payload.doctor_name,
         date=payload.date,
-        due_date=payload.due_date,
         diagnosis=payload.diagnosis,
         subtotal=payload.subtotal,
-        invoice_discount=payload.invoice_discount,
-        amount_due=payload.amount_due,
-        paid_amount=payload.paid_amount,
-        status=payload.status,
-        note=payload.note
+        discount=payload.discount,  # Changed from invoice_discount
+        total=payload.total  # Added total field
     )
     
     db.add(invoice)
@@ -767,10 +1257,9 @@ def create_invoice(payload: schemas.InvoiceCreate, db: Session = Depends(get_db)
     for treatment_data in payload.treatments:
         treatment = models.InvoiceTreatment(
             invoice_id=invoice.id,
-            procedure=treatment_data.procedure,
+            description=treatment_data.description,  # Changed from procedure
             quantity=treatment_data.quantity,
             unit_price=treatment_data.unit_price,
-            discount=treatment_data.discount,
             total=treatment_data.total
         )
         db.add(treatment)
@@ -783,14 +1272,11 @@ def create_invoice(payload: schemas.InvoiceCreate, db: Session = Depends(get_db)
 @app.get("/invoices", response_model=List[schemas.InvoiceOut])
 def list_invoices(db: Session = Depends(get_db),
                   current_user: models.User = Depends(get_current_user),
-                  patient_id: int = Query(None, description="Filter by patient ID"),
-                  status: str = Query(None, description="Filter by status")):
+                  patient_id: int = Query(None, description="Filter by patient ID")):
     query = db.query(models.Invoice).order_by(models.Invoice.created_at.desc())
     
     if patient_id:
         query = query.filter(models.Invoice.patient_id == patient_id)
-    if status:
-        query = query.filter(models.Invoice.status == status)
     
     invoices = query.all()
     return invoices
@@ -841,7 +1327,6 @@ def delete_invoice(invoice_id: int, db: Session = Depends(get_db),
     db.delete(invoice)
     db.commit()
     return
-
 
 @app.get("/")
 def read_root():

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Date, Integer, String, ForeignKey, DateTime, Text, Float, func, Boolean
+from sqlalchemy import BigInteger, Column, Date, Integer, String, ForeignKey, DateTime, Text, Float, func, Boolean
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
@@ -6,58 +6,232 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 
 # ---------------- Users ----------------
+# class User(Base):
+#     __tablename__ = "users"
+
+#     id = Column(Integer, primary_key=True, index=True)
+#     name = Column(String(100), nullable=False)
+#     email = Column(String(120), unique=True, index=True, nullable=False)
+#     role = Column(String(50), default="receptionist")
+#     password = Column(String(200), nullable=False)
+
+#     patients = relationship("Patient", back_populates="owner_doctor", cascade="all, delete-orphan")
+#     appointments = relationship("Appointment", back_populates="doctor", cascade="all, delete-orphan")
+
+
+# class User(Base):
+#     __tablename__ = "users"
+
+#     id = Column(Integer, primary_key=True, index=True)
+#     name = Column(String, nullable=False)
+#     email = Column(String, unique=True, index=True, nullable=False)
+#     role = Column(String, nullable=False)
+
+#     # ✅ rename to avoid clashing with any other 'patients' property on User
+#     doctor_patients = relationship(
+#         "Patient",
+#         back_populates="owner_doctor",
+#         foreign_keys="Patient.doctor_id",
+#         cascade="all, delete-orphan",
+#         passive_deletes=True,
+#     )
+
+
+# class User(Base):
+#     __tablename__ = "users"
+#     id = Column(Integer, primary_key=True, index=True)
+#     name = Column(String, nullable=False)
+#     email = Column(String, unique=True, index=True, nullable=False)
+#     role = Column(String, nullable=False)
+#     password = Column(String, nullable=False)
+
+#     # ⬇️ Doctor → Patients (RENAMED)
+#     doctor_patients = relationship(
+#         "Patient",
+#         back_populates="owner_doctor",
+#         foreign_keys="Patient.doctor_id",
+#         cascade="all, delete-orphan",
+#         passive_deletes=True,
+#     )
+
+#     # ⬇️ Doctor → Appointments (NO 'patients' HERE)
+#     doctor_appointments = relationship(
+#         "Appointment",
+#         back_populates="doctor",
+#         foreign_keys="Appointment.doctor_id",
+#         cascade="all, delete-orphan",
+#         passive_deletes=True,
+#     )
+
 class User(Base):
     __tablename__ = "users"
-
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(100), nullable=False)
-    email = Column(String(120), unique=True, index=True, nullable=False)
-    role = Column(String(50), default="receptionist")
-    password = Column(String(200), nullable=False)
+    name = Column(String, nullable=False)
+    email = Column(String, unique=True, index=True, nullable=False)
+    role = Column(String, nullable=False)
+    password = Column(String, nullable=False)
 
-    patients = relationship("Patient", back_populates="owner_doctor", cascade="all, delete-orphan")
-    appointments = relationship("Appointment", back_populates="doctor", cascade="all, delete-orphan")
+# ---------------- Patients ----------------
+# class Patient(Base):
+#     __tablename__ = "patients"
+
+#     id = Column(Integer, primary_key=True, index=True)
+#     name = Column(String(150), nullable=False)
+#     created_at = Column(DateTime, default=datetime.utcnow)
+#     doctor_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+#     contact = Column(Integer, nullable=False)
+
+#     # 👇 add these new columns
+#     age = Column(Integer, nullable=True)
+#     date_of_birth = Column(Date, nullable=True)  # Store DOB
+#     medical_history = Column(String, nullable=True)
+#     city = Column(String(100), nullable=True)
+
+#     owner_doctor = relationship("User", back_populates="patients")
+#     appointments = relationship("Appointment", back_populates="patient")
+
+# class Patient(Base):
+#     __tablename__ = "patients"
+    
+#     id = Column(Integer, primary_key=True, index=True)
+#     name = Column(String, nullable=False)
+#     contact = Column(BigInteger, nullable=False)
+#     doctor_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # FK to users table
+#     date_of_birth = Column(Date, nullable=True)
+#     medical_history = Column(Text, nullable=True)
+#     city = Column(String, nullable=True)
+#     created_at = Column(DateTime, default=datetime.utcnow)
+    
+#     # ✅ Relationship to User (doctor)
+#     # If your doctors are in 'users' table:
+#     owner_doctor = relationship("User", foreign_keys=[doctor_id], backref="patients")
+    
+#     # OR if your doctors are in a separate 'doctors' table:
+#     # owner_doctor = relationship("Doctor", foreign_keys=[doctor_id], backref="patients")
 
 
+
+# class Patient(Base):
+#     __tablename__ = "patients"
+#     id = Column(Integer, primary_key=True, index=True)
+#     name = Column(String, nullable=False)
+#     contact = Column(String)
+#     date_of_birth = Column(String)
+#     medical_history = Column(Text)
+#     city = Column(String)
+#     created_at = Column(DateTime, default=datetime.utcnow)
+
+#     # doctor_id = Column(Integer, ForeignKey("doctor.id", ondelete="SET NULL"), nullable=True)
+#     doctor_id = Column(Integer, ForeignKey("doctors.id", ondelete="SET NULL"), nullable=True)
+
+
+#     # ⬇️ MUST MATCH 'doctor_patients'
+#     owner_doctor = relationship(
+#         "Doctor",
+#         back_populates="doctor_patients",
+#         foreign_keys=[doctor_id],
+#     )
+
+#     # ⬇️ Patient ↔ Appointments
+#     appointments = relationship(
+#         "Appointment",
+#         back_populates="patient",
+#         foreign_keys="Appointment.patient_id",
+#         cascade="all, delete-orphan",
+#         passive_deletes=True,
+#     )
 # ---------------- Patients ----------------
 class Patient(Base):
     __tablename__ = "patients"
-
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(150), nullable=False)
+    name = Column(String, nullable=False)
+    contact = Column(String)
+    date_of_birth = Column(String)
+    medical_history = Column(Text)
+    city = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
-    doctor_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    contact = Column(Integer, nullable=False)
 
-    # 👇 add these new columns
-    age = Column(Integer, nullable=True)
-    date_of_birth = Column(Date, nullable=True)  # Store DOB
-    medical_history = Column(String, nullable=True)
-    city = Column(String(100), nullable=True)
+    # ✅ FK points to doctors table
+    doctor_id = Column(Integer, ForeignKey("doctors.id", ondelete="SET NULL"), nullable=True)
 
-    owner_doctor = relationship("User", back_populates="patients")
-    appointments = relationship("Appointment", back_populates="patient")
+    # ✅ Relationships
+    owner_doctor = relationship("Doctor", back_populates="patients")
+    appointments = relationship("Appointment", back_populates="patient", cascade="all, delete-orphan")
+
 
 
 
 # ---------------- Appointments ----------------
+# class Appointment(Base):
+#     __tablename__ = "appointments"
+
+#     id = Column(Integer, primary_key=True, index=True)
+#     patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False)
+#     doctor_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+#     appointment_datetime = Column(DateTime, nullable=False)
+#     status = Column(String(50), default="scheduled")
+#     notes = Column(Text, nullable=True)
+
+#     doctor = relationship("User", back_populates="appointments")
+#     patient = relationship("Patient", back_populates="appointments")
+
+
+# class Appointment(Base):
+#     __tablename__ = "appointments"
+#     id = Column(Integer, primary_key=True, index=True)
+#     doctor_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
+#     patient_id = Column(Integer, ForeignKey("patients.id", ondelete="SET NULL"))
+#     patient_name = Column(String)  # ✅ ADD THIS LINE
+
+#     appointment_datetime = Column(DateTime, nullable=False)
+#     status = Column(String, nullable=False, default="scheduled")
+#     notes = Column(Text)
+
+#     # ⬇️ MUST NOT USE backref='patients'
+#     doctor = relationship(
+#         "User",
+#         back_populates="doctor_appointments",
+#         foreign_keys=[doctor_id],
+#     )
+#     patient = relationship(
+#         "Patient",
+#         back_populates="appointments",
+#         foreign_keys=[patient_id],
+#     )
+
+# ---------------- Appointments ----------------
 class Appointment(Base):
     __tablename__ = "appointments"
-
     id = Column(Integer, primary_key=True, index=True)
-    patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False)
-    doctor_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    appointment_datetime = Column(DateTime, nullable=False)
-    status = Column(String(50), default="scheduled")
-    notes = Column(Text, nullable=True)
+    
+    # ✅ FK points to doctors table (NOT users)
+    doctor_id = Column(Integer, ForeignKey("doctors.id", ondelete="SET NULL"))
+    patient_id = Column(Integer, ForeignKey("patients.id", ondelete="SET NULL"))
+    patient_name = Column(String)
 
-    doctor = relationship("User", back_populates="appointments")
+    appointment_datetime = Column(DateTime, nullable=False)
+    status = Column(String, nullable=False, default="scheduled")
+    notes = Column(Text)
+
+    # ✅ Relationships
+    doctor = relationship("Doctor", back_populates="appointments")
     patient = relationship("Patient", back_populates="appointments")
 
 
-# ---------------- Doctors ----------------
-from sqlalchemy.orm import Mapped, mapped_column
+# # ---------------- Doctors ----------------
+# from sqlalchemy.orm import Mapped, mapped_column
 
+# class Doctor(Base):
+#     __tablename__ = "doctors"
+
+#     id: Mapped[int] = mapped_column(primary_key=True, index=True)
+#     name: Mapped[str] = mapped_column(String(200), nullable=False)
+#     qualifications: Mapped[str] = mapped_column(String(500), nullable=False)
+#     pmdc_no: Mapped[str] = mapped_column(String(100), nullable=False)
+#     cnic: Mapped[str] = mapped_column(String(20), nullable=False)
+#     is_disabled: Mapped[bool] = mapped_column(Boolean, default=False)
+
+# ---------------- Doctors ----------------
 class Doctor(Base):
     __tablename__ = "doctors"
 
@@ -67,6 +241,12 @@ class Doctor(Base):
     pmdc_no: Mapped[str] = mapped_column(String(100), nullable=False)
     cnic: Mapped[str] = mapped_column(String(20), nullable=False)
     is_disabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    
+    # ✅ Relationships
+    patients = relationship("Patient", back_populates="owner_doctor")
+    appointments = relationship("Appointment", back_populates="doctor")
+
+
 
 
 # ---------------- Services ----------------
@@ -144,7 +324,6 @@ class Inventory(Base):
 
 #..........invoice ............
 
-
 class Invoice(Base):
     __tablename__ = "invoices"
 
@@ -161,18 +340,12 @@ class Invoice(Base):
     
     # Invoice details
     date = Column(String, nullable=False)  # Invoice date
-    due_date = Column(String, nullable=False)
     diagnosis = Column(Text, nullable=True)
     
     # Financial details
     subtotal = Column(Float, nullable=False, default=0.0)
-    invoice_discount = Column(Float, nullable=False, default=0.0)
-    amount_due = Column(Float, nullable=False, default=0.0)
-    paid_amount = Column(Float, nullable=False, default=0.0)
-    
-    # Status and notes
-    status = Column(String, nullable=False, default="Pending")  # Pending or Completed
-    note = Column(Text, nullable=True)
+    discount = Column(Float, nullable=False, default=0.0)  # Changed from invoice_discount
+    total = Column(Float, nullable=False, default=0.0)  # Added to store final total
     
     # Timestamps
     created_at = Column(DateTime, default=datetime.now)
@@ -190,10 +363,9 @@ class InvoiceTreatment(Base):
     id = Column(Integer, primary_key=True, index=True)
     invoice_id = Column(Integer, ForeignKey("invoices.id", ondelete="CASCADE"), nullable=False)
     
-    procedure = Column(String, nullable=False)
+    description = Column(String, nullable=False)  # Changed from 'procedure'
     quantity = Column(Integer, nullable=False, default=1)
     unit_price = Column(Float, nullable=False)
-    discount = Column(Float, nullable=False, default=0.0)  # Discount percentage
     total = Column(Float, nullable=False)
     
     # Relationship

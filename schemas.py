@@ -1,8 +1,8 @@
 # schemas.py
-from pydantic import BaseModel, EmailStr , Field, validator
+from pydantic import BaseModel, ConfigDict, EmailStr , Field, model_validator, validator
 from datetime import date, datetime
 from typing import Literal, Optional
-from typing import List, Optional
+from typing import List, Optional, Any
 
 
 class UserCreate(BaseModel):
@@ -28,19 +28,32 @@ class TokenData(BaseModel):
     user_id: int
     role: str
 
+
+
+
+# class PatientCreate(BaseModel):
+#     name: str
+#     contact: int
+#     doctor_id: Optional[int] = None
+#     doctor_name: Optional[str] = None  # 👈 Allow frontend to send name
+#     date_of_birth: Optional[date] = None
+#     medical_history: Optional[str] = None
+#     city: Optional[str] = None
+
+
+#     @validator('date_of_birth')
+#     def validate_dob(cls, v):
+#         if v and v > date.today():
+#             raise ValueError('Date of birth cannot be in the future')
+#         return v
 class PatientCreate(BaseModel):
     name: str
-    doctor_id: Optional[int] 
-    contact : int
-    age: Optional[int] = None   # ✅ make it optional
-    date_of_birth: Optional[date] = None  # ✅ DOB field
+    contact: int  # ✅ Keep as int in Pydantic (it handles BigInteger automatically)
+    doctor_id: Optional[int] = None
+    doctor_name: Optional[str] = None  # Frontend can send this but we ignore it
+    date_of_birth: Optional[date] = None
     medical_history: Optional[str] = None
     city: Optional[str] = None
-    # name: str
-    # contact: int
-    # city: Optional[str] = None
-    # date_of_birth: Optional[date] = None
-    # medical_history: Optional[str] = None
 
     @validator('date_of_birth')
     def validate_dob(cls, v):
@@ -48,35 +61,78 @@ class PatientCreate(BaseModel):
             raise ValueError('Date of birth cannot be in the future')
         return v
 
+
+# class PatientUpdate(BaseModel):
+#     name: Optional[str]
+#     doctor_id: Optional[int]
+#     contact: Optional[int]
+#     age: Optional[int]
+#     date_of_birth: Optional[date] = None  # ✅ DOB field
+#     medical_history: Optional[str]
+#     city: Optional[str]
+
+#     @validator('date_of_birth')
+#     def validate_dob(cls, v):
+#         if v and v > date.today():
+#             raise ValueError('Date of birth cannot be in the future')
+#         return v
 
 class PatientUpdate(BaseModel):
-    name: Optional[str]
-    doctor_id: Optional[int]
-    contact: Optional[int]
-    age: Optional[int]
-    date_of_birth: Optional[date] = None  # ✅ DOB field
-    medical_history: Optional[str]
-    city: Optional[str]
+    name: Optional[str] = None
+    doctor_id: Optional[int] = None
+    contact: Optional[int] = None
+    age: Optional[int] = None
+    date_of_birth: Optional[date] = None
+    medical_history: Optional[str] = None
+    city: Optional[str] = None
 
     @validator('date_of_birth')
     def validate_dob(cls, v):
         if v and v > date.today():
             raise ValueError('Date of birth cannot be in the future')
         return v
+
+# class PatientOut(BaseModel):
+#     id: int
+#     name: str
+#     created_at: datetime
+#     doctor_id: Optional[int] = None  # keep it for internal use
+#     doctor_name: Optional[str] = None  # show this on frontend
+#     contact: int
+#     date_of_birth: Optional[date] = None
+#     age: Optional[int] = None
+#     medical_history: Optional[str] = None
+#     city: Optional[str] = None
+
+#     class Config:
+#         orm_mode = True
+        
+#     @validator('age', always=True)
+#     def calculate_age(cls, v, values):
+#         """Calculate age from date_of_birth"""
+#         dob = values.get('date_of_birth')
+#         if dob:
+#             today = date.today()
+#             age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+#             return age
+#         return None    
+
 
 class PatientOut(BaseModel):
     id: int
-    name: str
-    created_at: datetime
-    doctor_id: Optional[int]
-    contact: int
-    date_of_birth: Optional[date] = None  # ✅ DOB field
-    age: Optional[int] = None  # ✅ Calculated age (computed property)
+    name: Optional[str] = None
+    created_at: Optional[datetime] = None
+    doctor_id: Optional[int] = None
+    doctor_name: Optional[Any] = None
+    contact: Optional[int] = None
+    date_of_birth: Optional[date] = None
+    age: Optional[int] = None
     medical_history: Optional[str] = None
     city: Optional[str] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True  # ✅ Updated for Pydantic v2 (was orm_mode)
+        # orm_mode = True  # Use this if you're on Pydantic v1
         
     @validator('age', always=True)
     def calculate_age(cls, v, values):
@@ -86,25 +142,70 @@ class PatientOut(BaseModel):
             today = date.today()
             age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
             return age
-        return None    
+        return None
+
+
+
+# class AppointmentCreate(BaseModel):
+#     patient_id: int
+#     doctor_id: int
+#     appointment_datetime: datetime
+#     status: Optional[str] = "scheduled"
+#     notes: Optional[str] = None
+
+# class AppointmentOut(BaseModel):
+#     id: int
+#     patient_id: int
+#     doctor_id: int
+#     appointment_datetime: datetime
+#     status: str
+#     notes: Optional[str]
+#     patient_name: Optional[str] = None   # ← add this
+
+
+#     class Config:
+#         orm_mode = True
+
+# class AppointmentCreate(BaseModel):
+#     patient_id: int
+#     doctor_id: int
+#     appointment_datetime: datetime
+#     status: Optional[str] = "scheduled"
+#     notes: Optional[str] = None
 
 class AppointmentCreate(BaseModel):
-    patient_id: int
+    patient_id: Optional[int] = None
+    patient_name: Optional[str] = None
     doctor_id: int
     appointment_datetime: datetime
     status: Optional[str] = "scheduled"
     notes: Optional[str] = None
 
+    @model_validator(mode="after")
+    def check_patient_inputs(self):
+        if not self.patient_id and not (self.patient_name and self.patient_name.strip()):
+            raise ValueError("Provide patient_id or patient_name")
+        return self
+
 class AppointmentOut(BaseModel):
     id: int
-    patient_id: int
+    patient_id: Optional[int] = None
     doctor_id: int
     appointment_datetime: datetime
     status: str
-    notes: Optional[str]
+    notes: str
+    patient_name: Optional[str] = None
+    doctor_name: Optional[str] = None
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
+
+class AppointmentUpdate(BaseModel):
+    doctor_id: Optional[int] = None
+    appointment_datetime: Optional[datetime] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+    patient_name: Optional[str] = None
+    patient_id: Optional[int] = None
 
 # schemas.py
 
@@ -263,11 +364,11 @@ class InventoryOut(BaseModel):
 #..........invoice ..........
 # Treatment schemas
 class TreatmentBase(BaseModel):
-    procedure: str
+    description: str  # Changed from 'procedure'
     quantity: int
     unit_price: float
-    discount: float = 0.0
     total: float
+    # Removed per-treatment discount since frontend doesn't use it
 
 class TreatmentCreate(TreatmentBase):
     pass
@@ -290,15 +391,12 @@ class InvoiceCreate(BaseModel):
     patient_contact: str
     doctor_name: Optional[str] = None
     date: str
-    due_date: str
     diagnosis: Optional[str] = None
     treatments: list[TreatmentCreate]
     subtotal: float
-    invoice_discount: float = 0.0
-    amount_due: float
-    paid_amount: float = 0.0
-    status: str = "Pending"
-    note: Optional[str] = None
+    discount: float = 0.0  # Changed from 'invoice_discount' to match frontend
+    total: float  # Added to match frontend calculation
+    # Removed due_date, paid_amount, status, note as frontend doesn't use them initially
 
 
 class InvoiceOut(BaseModel):
@@ -311,14 +409,10 @@ class InvoiceOut(BaseModel):
     patient_contact: str
     doctor_name: Optional[str]
     date: str
-    due_date: str
     diagnosis: Optional[str]
     subtotal: float
-    invoice_discount: float
-    amount_due: float
-    paid_amount: float
-    status: str
-    note: Optional[str]
+    discount: float
+    total: float
     treatments: List[TreatmentOut]
     created_at: datetime
     updated_at: datetime
@@ -328,9 +422,10 @@ class InvoiceOut(BaseModel):
 
 
 class InvoiceUpdate(BaseModel):
-    status: Optional[str] = None
-    paid_amount: Optional[float] = None
-    note: Optional[str] = None
+    diagnosis: Optional[str] = None
+    subtotal: Optional[float] = None
+    discount: Optional[float] = None
+    total: Optional[float] = None
 
 
 
