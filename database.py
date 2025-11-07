@@ -2,23 +2,22 @@
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-# Using SQLite file called test.db
-SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"
+# PostgreSQL connection URL
+SQLALCHEMY_DATABASE_URL = "postgresql://postgres:pakistan@localhost:5432/myappdb"
 
-# For sqlite we need check_same_thread=False
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
-)
+# Create PostgreSQL engine
+engine = create_engine(SQLALCHEMY_DATABASE_URL)
 
+# Create session and base
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# Optional: quick test connection when module loads
+# Optional: test database connection
 def test_connection():
     try:
         with engine.connect() as connection:
             result = connection.execute(text("SELECT 1"))
-            print("✅ Database connected:", result.scalar())
+            print("✅ PostgreSQL connected:", result.scalar())
     except Exception as e:
         print("❌ Database connection failed:", str(e))
 
