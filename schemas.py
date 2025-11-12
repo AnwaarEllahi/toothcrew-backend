@@ -1,8 +1,9 @@
 # schemas.py
-from pydantic import BaseModel, ConfigDict, EmailStr , Field, model_validator, validator
+from pydantic import BaseModel, ConfigDict, EmailStr , Field, model_validator, validator , field_validator
 from datetime import date, datetime
 from typing import Literal, Optional
 from typing import List, Optional, Any
+import re
 
 
 class UserCreate(BaseModel):
@@ -31,29 +32,17 @@ class TokenData(BaseModel):
 
 
 
-# class PatientCreate(BaseModel):
-#     name: str
-#     contact: int
-#     doctor_id: Optional[int] = None
-#     doctor_name: Optional[str] = None  # 👈 Allow frontend to send name
-#     date_of_birth: Optional[date] = None
-#     medical_history: Optional[str] = None
-#     city: Optional[str] = None
 
-
-#     @validator('date_of_birth')
-#     def validate_dob(cls, v):
-#         if v and v > date.today():
-#             raise ValueError('Date of birth cannot be in the future')
-#         return v
 class PatientCreate(BaseModel):
     name: str
-    contact: int  # ✅ Keep as int in Pydantic (it handles BigInteger automatically)
+    contact: str  # ✅ Keep as int in Pydantic (it handles BigInteger automatically)
     doctor_id: Optional[int] = None
     doctor_name: Optional[str] = None  # Frontend can send this but we ignore it
     date_of_birth: Optional[date] = None
     medical_history: Optional[str] = None
     city: Optional[str] = None
+    company_id: Optional[int] = None  # ✅ Add this line
+
 
     @validator('date_of_birth')
     def validate_dob(cls, v):
@@ -62,60 +51,24 @@ class PatientCreate(BaseModel):
         return v
 
 
-# class PatientUpdate(BaseModel):
-#     name: Optional[str]
-#     doctor_id: Optional[int]
-#     contact: Optional[int]
-#     age: Optional[int]
-#     date_of_birth: Optional[date] = None  # ✅ DOB field
-#     medical_history: Optional[str]
-#     city: Optional[str]
 
-#     @validator('date_of_birth')
-#     def validate_dob(cls, v):
-#         if v and v > date.today():
-#             raise ValueError('Date of birth cannot be in the future')
-#         return v
 
 class PatientUpdate(BaseModel):
     name: Optional[str] = None
     doctor_id: Optional[int] = None
-    contact: Optional[int] = None
+    contact: Optional[str] = None
     age: Optional[int] = None
     date_of_birth: Optional[date] = None
     medical_history: Optional[str] = None
     city: Optional[str] = None
+    company_id: Optional[int] = None  # ✅ Add this
+
 
     @validator('date_of_birth')
     def validate_dob(cls, v):
         if v and v > date.today():
             raise ValueError('Date of birth cannot be in the future')
         return v
-
-# class PatientOut(BaseModel):
-#     id: int
-#     name: str
-#     created_at: datetime
-#     doctor_id: Optional[int] = None  # keep it for internal use
-#     doctor_name: Optional[str] = None  # show this on frontend
-#     contact: int
-#     date_of_birth: Optional[date] = None
-#     age: Optional[int] = None
-#     medical_history: Optional[str] = None
-#     city: Optional[str] = None
-
-#     class Config:
-#         orm_mode = True
-        
-#     @validator('age', always=True)
-#     def calculate_age(cls, v, values):
-#         """Calculate age from date_of_birth"""
-#         dob = values.get('date_of_birth')
-#         if dob:
-#             today = date.today()
-#             age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
-#             return age
-#         return None    
 
 
 class PatientOut(BaseModel):
@@ -124,11 +77,14 @@ class PatientOut(BaseModel):
     created_at: Optional[datetime] = None
     doctor_id: Optional[int] = None
     doctor_name: Optional[Any] = None
-    contact: Optional[int] = None
+    contact: Optional[str] = None
     date_of_birth: Optional[date] = None
     age: Optional[int] = None
     medical_history: Optional[str] = None
     city: Optional[str] = None
+    company_id: Optional[int] = None      # ✅ Add this
+    company_name: Optional[str] = None    # ✅ Add this
+
 
     class Config:
         from_attributes = True  # ✅ Updated for Pydantic v2 (was orm_mode)
@@ -146,45 +102,64 @@ class PatientOut(BaseModel):
 
 
 
+
 # class AppointmentCreate(BaseModel):
-#     patient_id: int
+#     patient_id: Optional[int] = None
+#     patient_name: Optional[str] = None
 #     doctor_id: int
 #     appointment_datetime: datetime
 #     status: Optional[str] = "scheduled"
 #     notes: Optional[str] = None
-
-# class AppointmentOut(BaseModel):
-#     id: int
-#     patient_id: int
-#     doctor_id: int
-#     appointment_datetime: datetime
-#     status: str
-#     notes: Optional[str]
-#     patient_name: Optional[str] = None   # ← add this
+#     company_id: int | None = None            # ✅
 
 
-#     class Config:
-#         orm_mode = True
+#     @model_validator(mode="after")
+#     def check_patient_inputs(self):
+#         if not self.patient_id and not (self.patient_name and self.patient_name.strip()):
+#             raise ValueError("Provide patient_id or patient_name")
+#         return self
 
-# class AppointmentCreate(BaseModel):
-#     patient_id: int
-#     doctor_id: int
-#     appointment_datetime: datetime
-#     status: Optional[str] = "scheduled"
-#     notes: Optional[str] = None
+
+PHONE_RE = re.compile(r'^\+?\d[\d\s()\-]{6,}$')  # loose but practical
 
 class AppointmentCreate(BaseModel):
     patient_id: Optional[int] = None
     patient_name: Optional[str] = None
+    # NEW
+    patient_contact: Optional[str] = Field(None, max_length=50)
+
     doctor_id: int
     appointment_datetime: datetime
     status: Optional[str] = "scheduled"
     notes: Optional[str] = None
+    company_id: int | None = None
+
+    # Normalise strings
+    @field_validator("patient_name", "patient_contact", mode="before")
+    @classmethod
+    def _strip_str(cls, v):
+        return v.strip() if isinstance(v, str) else v
+
+    # Optional phone sanity check (only if provided)
+    @field_validator("patient_contact")
+    @classmethod
+    def _validate_phone(cls, v):
+        if v is None or v == "":
+            return None
+        if len(v) > 50:
+            raise ValueError("patient_contact too long")
+        if not PHONE_RE.match(v):
+            raise ValueError("Invalid patient_contact format")
+        return v
 
     @model_validator(mode="after")
     def check_patient_inputs(self):
+        # Must have either patient_id OR a non-empty patient_name
         if not self.patient_id and not (self.patient_name and self.patient_name.strip()):
             raise ValueError("Provide patient_id or patient_name")
+        # Optional: if no patient_id and only name, encourage contact (commented hard rule)
+        # if not self.patient_id and not self.patient_contact:
+        #     raise ValueError("Provide patient_contact when creating by patient_name")
         return self
 
 class AppointmentOut(BaseModel):
@@ -195,9 +170,38 @@ class AppointmentOut(BaseModel):
     status: str
     notes: str
     patient_name: Optional[str] = None
+    # NEW
+    patient_contact: Optional[str] = None
+
     doctor_name: Optional[str] = None
+    company_id: int | None = None
+    company_name: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+# class AppointmentOut(BaseModel):
+#     id: int
+#     patient_id: Optional[int] = None
+#     doctor_id: int
+#     appointment_datetime: datetime
+#     status: str
+#     notes: str
+#     patient_name: Optional[str] = None
+#     doctor_name: Optional[str] = None
+#     company_id: int | None = None            # ✅
+#     company_name: str | None = None          # ✅
+
+#     model_config = ConfigDict(from_attributes=True)
+
+# class AppointmentUpdate(BaseModel):
+#     doctor_id: Optional[int] = None
+#     appointment_datetime: Optional[datetime] = None
+#     status: Optional[str] = None
+#     notes: Optional[str] = None
+#     patient_name: Optional[str] = None
+#     patient_id: Optional[int] = None
+#     company_id: int | None = None            # ✅
+
 
 class AppointmentUpdate(BaseModel):
     doctor_id: Optional[int] = None
@@ -206,6 +210,25 @@ class AppointmentUpdate(BaseModel):
     notes: Optional[str] = None
     patient_name: Optional[str] = None
     patient_id: Optional[int] = None
+    company_id: int | None = None
+    # NEW
+    patient_contact: Optional[str] = Field(None, max_length=50)
+
+    @field_validator("patient_name", "patient_contact", mode="before")
+    @classmethod
+    def _strip_str(cls, v):
+        return v.strip() if isinstance(v, str) else v
+
+    @field_validator("patient_contact")
+    @classmethod
+    def _validate_phone(cls, v):
+        if v is None or v == "":
+            return None
+        if len(v) > 50:
+            raise ValueError("patient_contact too long")
+        if not PHONE_RE.match(v):
+            raise ValueError("Invalid patient_contact format")
+        return v
 
 # schemas.py
 
@@ -232,49 +255,7 @@ class DoctorOut(BaseModel):
     class Config:
         from_attributes = True  # Updated for Pydantic v2 (use orm_mode = True for Pydantic v1)
 
-# # schemas.py (services)
-# from pydantic import BaseModel
-# from typing import Optional
-
-# class ServiceCreate(BaseModel):
-#     name: str
-#     price: str
-#     type: str
-#     description: Optional[str] = None
-
-# class ServiceOut(BaseModel):
-#     id: int
-#     name: str
-#     price: str
-#     type: str
-#     description: Optional[str] = None
-
-#     class Config:
-#         orm_mode = True
-
-
 # ---------------- Expense Schemas ----------------
-# from datetime import datetime
-# from pydantic import BaseModel
-# from typing import Optional
-
-# class ExpenseBase(BaseModel):
-#     title: str
-#     amount: int
-#     category: Optional[str] = None
-#     description: Optional[str] = None
-
-# class ExpenseCreate(ExpenseBase):
-#     pass
-
-# class ExpenseOut(ExpenseBase):
-#     id: int
-#     date: datetime
-
-#     class Config:
-#         orm_mode = True
-
-
 
 class ExpenseBase(BaseModel):
     title: str
@@ -320,46 +301,6 @@ class InventoryOut(BaseModel):
 
 
 # #...... servies schemas ..........
-# class CategoryBase(BaseModel):
-#     name: str = Field(..., example="Ortho")
-
-# class CategoryCreate(CategoryBase):
-#     pass
-
-# class CategoryOut(CategoryBase):
-#     id: int
-#     created_at: Optional[datetime]
-
-#     class Config:
-#         orm_mode = True
-
-# class ServiceBase(BaseModel):
-#     name: str = Field(..., example="Root Canal")
-#     price_text: Optional[str] = Field(None, example="Rs. 2000")
-#     price_amount: Optional[int] = Field(None, example=2000, description="Price in PKR integer")
-#     currency: Optional[str] = Field("PKR")
-
-# class ServiceCreate(ServiceBase):
-#     category_id: int
-
-# class ServiceUpdate(BaseModel):
-#     name: Optional[str]
-#     price_text: Optional[str]
-#     price_amount: Optional[int]
-#     is_active: Optional[bool]
-#     category_id: Optional[int]
-
-# class ServiceOut(ServiceBase):
-#     id: int
-#     category_id: int
-#     is_active: bool
-#     created_at: Optional[datetime]
-#     updated_at: Optional[datetime]
-
-#     class Config:
-#         orm_mode = True
-
-
 
 #..........invoice ..........
 # Treatment schemas
@@ -459,15 +400,6 @@ class ServiceUpdate(BaseModel):
     is_active: Optional[bool]
     category_id: Optional[int]
 
-# class ServiceOut(ServiceBase):
-#     id: int
-#     category_id: int
-#     is_active: bool
-#     created_at: Optional[datetime]
-#     updated_at: Optional[datetime]
-
-#     class Config:
-#         orm_mode = True
 
 
 # schemas.py (services)
@@ -493,3 +425,24 @@ class ServiceOut(BaseModel):
 
     class Config:
         orm_mode = True
+
+
+class CompanyBase(BaseModel):
+  name: str = Field(..., min_length=1, max_length=200)
+  is_disabled: Optional[bool] = False
+
+class CompanyCreate(CompanyBase):
+  pass
+
+class CompanyUpdate(BaseModel):
+  name: Optional[str] = Field(None, min_length=1, max_length=200)
+  is_disabled: Optional[bool] = None
+
+class CompanyOut(BaseModel):
+  id: int
+  name: str
+  is_disabled: bool
+  created_at: datetime
+
+  class Config:
+    from_attributes = True

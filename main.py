@@ -18,6 +18,9 @@ from fastapi import Query
 from typing import cast
 from typing import Optional
 from sqlalchemy import func
+from schemas import CompanyCreate, CompanyUpdate, CompanyOut
+from sqlalchemy.exc import IntegrityError
+
 
 
 
@@ -32,6 +35,12 @@ app = FastAPI(title="Clinic Backend (FastAPI)")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    # allow_origins=["https://pseudolobar-impetuously-wanda.ngrok-free.dev/ "],
+    # # ngrok url and localhost for testing
+    #  allow_origins=[
+    #     "https://occur-tackle-snapshot-count.trycloudflare.com",  # ✅ Your Cloudflare URL
+    #     "http://localhost:3000",
+    # ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -163,38 +172,48 @@ def dashboard(current_user: models.User = Depends(get_current_user), db: Session
 
 
 # ---------------- Patients ----------------
+
+
+
+
 # @app.post("/patients", response_model=schemas.PatientOut, status_code=status.HTTP_201_CREATED)
 # def create_patient(
 #     payload: schemas.PatientCreate,
 #     db: Session = Depends(get_db),
 #     current_user: models.User = Depends(require_role("admin", "receptionist", "doctor"))
 # ):
+#     # prefer explicit doctor_id, but allow resolving from doctor_name (doctors table)
 #     doctor_id = payload.doctor_id
+#     print("Received doctor_id:", doctor_id)
+#     # If frontend sent doctor_name (and not doctor_id), resolve it from the Doctor table
+#     doctor_name = getattr(payload, "doctor_name", None)
+#     if doctor_id is None and doctor_name:
+#         doctor = db.query(models.Doctor).filter(models.Doctor.name == doctor_name).first()
+#         if not doctor:
+#             raise HTTPException(status_code=404, detail=f"Doctor '{doctor_name}' not found")
+#         doctor_id = doctor.id
 
-#    # If frontend sends doctor_name, find doctor_id automatically
-#     if not doctor_id and payload.doctor_name:
-#         doctor = db.query(models.User).filter(models.User.name == payload.doctor_name).first()
-#         if doctor:
-#             doctor_id = doctor.id
-#         else:
-#             raise HTTPException(status_code=404, detail=f"Doctor '{payload.doctor_name}' not found")
-   
-
-
+#     # if a doctor_id was provided, validate it exists in doctors table
+#     if doctor_id is not None:
+#         exists = db.query(models.Doctor).filter(models.Doctor.id == doctor_id).first()
+#         if not exists:
+#             raise HTTPException(status_code=422, detail=f"doctor_id {doctor_id} does not exist")
+#     print(exists.__dict__)
 #     patient = models.Patient(
 #         name=payload.name,
-#         doctor_id=doctor_id,
+#         doctor_id=doctor_id,                    # FK or None (from doctors table)
 #         contact=payload.contact,
 #         date_of_birth=payload.date_of_birth,
 #         medical_history=payload.medical_history,
 #         city=payload.city,
+        
 #     )
-
 #     db.add(patient)
 #     db.commit()
 #     db.refresh(patient)
-#     return patient
-
+#     return schemas.PatientOut.model_validate(patient, from_attributes=True).model_copy(
+#     update={"doctor_name": exists.name if exists else None}
+#     )
 
 @app.post("/patients", response_model=schemas.PatientOut, status_code=status.HTTP_201_CREATED)
 def create_patient(
@@ -202,176 +221,106 @@ def create_patient(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(require_role("admin", "receptionist", "doctor"))
 ):
-    # prefer explicit doctor_id, but allow resolving from doctor_name (doctors table)
+    # resolve doctor_id from doctor_name if needed
     doctor_id = payload.doctor_id
-    print("Received doctor_id:", doctor_id)
-    # If frontend sent doctor_name (and not doctor_id), resolve it from the Doctor table
-    doctor_name = getattr(payload, "doctor_name", None)
-    if doctor_id is None and doctor_name:
-        doctor = db.query(models.Doctor).filter(models.Doctor.name == doctor_name).first()
-        if not doctor:
-            raise HTTPException(status_code=404, detail=f"Doctor '{doctor_name}' not found")
-        doctor_id = doctor.id
-
-    # if a doctor_id was provided, validate it exists in doctors table
-    if doctor_id is not None:
-        exists = db.query(models.Doctor).filter(models.Doctor.id == doctor_id).first()
-        if not exists:
+    doctor_obj = None
+    if doctor_id is None and payload.doctor_name:
+        doctor_obj = db.query(models.Doctor).filter(models.Doctor.name == payload.doctor_name.strip()).first()
+        if not doctor_obj:
+            raise HTTPException(status_code=404, detail=f"Doctor '{payload.doctor_name}' not found")
+        doctor_id = doctor_obj.id
+    elif doctor_id is not None:
+        doctor_obj = db.query(models.Doctor).filter(models.Doctor.id == doctor_id).first()
+        if not doctor_obj:
             raise HTTPException(status_code=422, detail=f"doctor_id {doctor_id} does not exist")
-    print(exists.__dict__)
+
     patient = models.Patient(
-        name=payload.name,
-        doctor_id=doctor_id,                    # FK or None (from doctors table)
-        contact=payload.contact,
-        date_of_birth=payload.date_of_birth,
+        name=payload.name.strip(),
+        contact=payload.contact.strip(),             # string now
+        date_of_birth=payload.date_of_birth,         # this is a date or None
         medical_history=payload.medical_history,
         city=payload.city,
+        doctor_id=doctor_id,
+        company_id=payload.company_id,               # save company
     )
     db.add(patient)
     db.commit()
     db.refresh(patient)
+
     return schemas.PatientOut.model_validate(patient, from_attributes=True).model_copy(
-    update={"doctor_name": exists.name if exists else None}
+        update={
+            "doctor_name": doctor_obj.name if doctor_obj else None,
+            "company_name": patient.company.name if patient.company else None,
+        }
     )
 
-
-
-
-# @app.get("/patients", response_model=List[schemas.PatientOut])
-# def list_patients(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-#     print(current_user.id)
-#     if (getattr(current_user, "role", "") or "").lower() == "doctor":
-#         patients = db.query(models.Patient).filter(models.Patient.doctor_id == int(getattr(current_user, "id"))).all()
-#     else:
-#         patients = db.query(models.Patient).all()
-#     return patients
-
-# @app.get("/patients", response_model=List[schemas.PatientOut])
-# def list_patients(db: Session = Depends(get_db)):
-#     patients = db.query(models.Patient).all()
-#     return patients
-
-
-
-
-# @app.get("/patients", response_model=List[schemas.PatientOut])
+# @app.get("/patients", response_model=list[schemas.PatientOut])
 # def list_patients(
-#     db: Session = Depends(get_db),
-#     month: int = Query(None, ge=1, le=12, description="Filter by month"),
-#     year: int = Query(None, ge=1900, le=2100, description="Filter by year")
+#     month: int | None = Query(None),
+#     year: int | None = Query(None),
+#     db: Session = Depends(get_db)
 # ):
 #     query = db.query(models.Patient)
 
 #     if month and year:
 #         query = query.filter(
-#             func.extract('month', models.Patient.created_at) == month,
-#             func.extract('year', models.Patient.created_at) == year
+#             extract("month", models.Patient.created_at) == month,
+#             extract("year", models.Patient.created_at) == year
 #         )
-#     elif month:
-#         query = query.filter(func.extract('month', models.Patient.created_at) == month)
-#     elif year:
-#         query = query.filter(func.extract('year', models.Patient.created_at) == year)
 
 #     patients = query.all()
-
-#     patients_with_doctor = []
-#     for p in patients:
-#         doctor_name = p.owner_doctor.name if p.owner_doctor else None
-#         patient_dict = schemas.PatientOut.from_orm(p).dict()
-#         patient_dict["doctor_name"] = doctor_name
-
-#         # 🧩 Optionally hide doctor_id from frontend
-#         if "doctor_id" in patient_dict:
-#             del patient_dict["doctor_id"]
-
-#         patients_with_doctor.append(patient_dict)
-
-#     return patients_with_doctor
-
-
-# @app.get("/patients", response_model=list[schemas.PatientOut])
-# def list_patients(db: Session = Depends(get_db)):
-#     patients = db.query(models.Patient).all()
 #     today = date.today()
 #     patient_list = []
 
 #     for patient in patients:
-#         dob_value = patient.date_of_birth   # coming from database
+#         dob_value = patient.date_of_birth
 #         age = None
 
 #         if dob_value is not None:
-#             # Convert string to date if needed
 #             if isinstance(dob_value, str):
 #                 try:
 #                     dob_date = datetime.strptime(dob_value, "%Y-%m-%d").date()
 #                 except ValueError:
-#                     # If the format is different, adjust "%Y-%m-%d" accordingly
 #                     dob_date = None
 #             else:
-#                 dob_date = dob_value  # already a date object
+#                 dob_date = dob_value
 
 #             if dob_date is not None:
-#                 # Calculate age
-#                 age = today.year - dob_date.year - ((today.month, today.day) < (dob_date.month, dob_date.day))
-#         if patient.owner_doctor is not None:
-#             print("patient.owner_doctor", patient.owner_doctor.__dict__)            
-#             print("owner_doctor", patient.__dict__)
+#                 age = today.year - dob_date.year - (
+#                     (today.month, today.day) < (dob_date.month, dob_date.day)
+#                 )
 
-#         patient_list.append({
-#             "id": patient.id,
-#             "name": patient.name,
-#             "contact": patient.contact,
-#             "date_of_birth": dob_date,
-#             "age": age,
-#             "medical_history": patient.medical_history,
-#             "city": patient.city,
-#             "doctor_id": patient.doctor_id,
-#             "doctor_name": patient.owner_doctor if patient.owner_doctor else None,
-#             "date": patient.created_at
-#         })
-
-#     return patient_list
-
-# @app.get("/patients", response_model=list[schemas.PatientOut])
-# def list_patients(db: Session = Depends(get_db)):
-#     patients = db.query(models.Patient).all()
-#     today = date.today()
-#     patient_list = []
-
-#     for patient in patients:
-#         dob_value = patient.date_of_birth   # coming from database
-#         age = None
-
-#         if dob_value is not None:
-#             # Convert string to date if needed
-#             if isinstance(dob_value, str):
-#                 try:
-#                     dob_date = datetime.strptime(dob_value, "%Y-%m-%d").date()
-#                 except ValueError:
-#                     # If the format is different, adjust "%Y-%m-%d" accordingly
-#                     dob_date = None
-#             else:
-#                 dob_date = dob_value  # already a date object
-
-#             if dob_date is not None:
-#                 # Calculate age
-#                 age = today.year - dob_date.year - ((today.month, today.day) < (dob_date.month, dob_date.day))
-
-#         # ✅ FIX: Extract the doctor name properly
+#         # ✅ Safely get doctor name
 #         doctor_name = None
 #         if patient.owner_doctor is not None:
 #             doctor_name = patient.owner_doctor.name
+        
+#         # ✅ Safely get company info with hasattr check
+#         company_name = None
+#         company_id = None
+#         try:
+#             if hasattr(patient, 'company') and patient.company is not None:
+#                 company_name = patient.company.name
+#                 company_id = patient.company_id
+#             elif patient.company_id is not None:
+#                 # If relationship not loaded but ID exists
+#                 company_id = patient.company_id
+#         except Exception as e:
+#             print(f"Error accessing company for patient {patient.id}: {e}")
+#             # Continue without company info
 
 #         patient_list.append({
 #             "id": patient.id,
 #             "name": patient.name,
 #             "contact": patient.contact,
-#             "date_of_birth": dob_date,
+#             "date_of_birth": dob_date if 'dob_date' in locals() else None,
 #             "age": age,
 #             "medical_history": patient.medical_history,
 #             "city": patient.city,
 #             "doctor_id": patient.doctor_id,
-#             "doctor_name": doctor_name,  # ✅ Now correctly returns just the name string
+#             "doctor_name": doctor_name,
+#             "company_id": company_id,
+#             "company_name": company_name,
 #             "created_at": patient.created_at
 #         })
 
@@ -398,6 +347,7 @@ def list_patients(
     for patient in patients:
         dob_value = patient.date_of_birth
         age = None
+        dob_date = None  # ✅ INITIALIZE HERE - outside the if block!
 
         if dob_value is not None:
             if isinstance(dob_value, str):
@@ -413,20 +363,37 @@ def list_patients(
                     (today.month, today.day) < (dob_date.month, dob_date.day)
                 )
 
+        # ✅ Safely get doctor name
         doctor_name = None
         if patient.owner_doctor is not None:
             doctor_name = patient.owner_doctor.name
+        
+        # ✅ Safely get company info with hasattr check
+        company_name = None
+        company_id = None
+        try:
+            if hasattr(patient, 'company') and patient.company is not None:
+                company_name = patient.company.name
+                company_id = patient.company_id
+            elif patient.company_id is not None:
+                # If relationship not loaded but ID exists
+                company_id = patient.company_id
+        except Exception as e:
+            print(f"Error accessing company for patient {patient.id}: {e}")
+            # Continue without company info
 
         patient_list.append({
             "id": patient.id,
             "name": patient.name,
             "contact": patient.contact,
-            "date_of_birth": dob_date,
+            "date_of_birth": dob_date,  # ✅ FIXED - now uses the properly initialized variable
             "age": age,
             "medical_history": patient.medical_history,
             "city": patient.city,
             "doctor_id": patient.doctor_id,
             "doctor_name": doctor_name,
+            "company_id": company_id,
+            "company_name": company_name,
             "created_at": patient.created_at
         })
 
@@ -461,123 +428,189 @@ def delete_patient(patient_id: int, db: Session = Depends(get_db)):
     return {"message": "Patient deleted successfully"}
 
 # ---------------- Appointments ----------------
+
+# ---------------- Appointments (fix create + list uses Doctor, not User) ----------------
+from sqlalchemy.exc import IntegrityError
+# -------------------- CREATE APPOINTMENT --------------------
 # @app.post("/appointments", response_model=schemas.AppointmentOut, status_code=status.HTTP_201_CREATED)
-# def create_appointment(payload: schemas.AppointmentCreate, db: Session = Depends(get_db),
-#                        current_user: models.User = Depends(require_role("admin", "receptionist"))):
-#     appointment = models.Appointment(
-#         patient_id=int(payload.patient_id),
-#         doctor_id=int(payload.doctor_id),
-#         appointment_datetime=payload.appointment_datetime,
-#         status=payload.status,
-#         notes=payload.notes
-#     )
-#     db.add(appointment)
-#     db.commit()
-#     db.refresh(appointment)
-#     return appointment
+# def create_appointment(
+#     payload: schemas.AppointmentCreate,
+#     db: Session = Depends(get_db),
+#     current_user: models.User = Depends(require_role("admin", "receptionist"))
+# ):
+#     # ✅ Prevent double booking
+#     clash = db.query(models.Appointment).filter(
+#         models.Appointment.doctor_id == payload.doctor_id,
+#         models.Appointment.appointment_datetime == payload.appointment_datetime
+#     ).first()
+#     if clash:
+#         raise HTTPException(status_code=409, detail="Slot already booked for this doctor at that time.")
 
+#     # ✅ Determine patient ID and name
+#     patient_id = payload.patient_id
+#     patient_name = payload.patient_name
 
-# @app.post("/appointments", response_model=schemas.AppointmentOut)
-# def create_appointment(payload: schemas.AppointmentCreate, db: Session = Depends(get_db)):
+#     # If only patient_id is given, fetch the name from patients table
+#     if patient_id and not patient_name:
+#         patient = db.query(models.Patient).filter(models.Patient.id == patient_id).first()
+#         if not patient:
+#             raise HTTPException(status_code=404, detail="Patient not found")
+#         patient_name = patient.name
+
+#     # ✅ Create appointment
 #     appt = models.Appointment(
-#         patient_name=payload.patient_name,                  # free text
+#         patient_id=patient_id,
+#         patient_name=patient_name,
 #         doctor_id=payload.doctor_id,
 #         appointment_datetime=payload.appointment_datetime,
 #         status=payload.status,
 #         notes=payload.notes,
 #     )
+
 #     db.add(appt)
-#     db.commit()
+    
+#     try:
+#         db.commit()
+#     except IntegrityError:
+#         db.rollback()
+#         raise HTTPException(status_code=409, detail="Slot already booked for this doctor at that time.")
 #     db.refresh(appt)
 
-#     # fetch the doctor INSTANCE, then use its .name (a str), not the Column
-#     doctor = db.query(models.User).filter(models.User.id == appt.doctor_id).first()
-
-#     # build response without mutating fields with Column types
-#     out = schemas.AppointmentOut.model_validate(appt, from_attributes=True).model_copy(
+#     # ✅ Fetch doctor name
+#     doctor = db.query(models.Doctor).filter(models.Doctor.id == appt.doctor_id).first()
+#     return schemas.AppointmentOut.model_validate(appt, from_attributes=True).model_copy(
 #         update={"doctor_name": doctor.name if doctor else None}
 #     )
-#     return out
-
-
-    # out = schemas.AppointmentOut.from_orm(appointment)
-    # out.patient_name = appointment.patient.name if appointment.patient else None
-    # return out
+   
 
 
 
-# @app.get("/appointments", response_model=List[schemas.AppointmentOut])
-# def list_appointments(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-#     if (getattr(current_user, "role", "") or "").lower() == "doctor":
-#         appts = db.query(models.Appointment).filter(models.Appointment.doctor_id == int(getattr(current_user, "id"))).all()
-#     else:
-#         appts = db.query(models.Appointment).all()
-#     return appts
 
-# @app.get("/appointments", response_model=List[schemas.AppointmentOut])
-# def list_appointments(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-#     if (getattr(current_user, "role", "") or "").lower() == "doctor":
-#         appts = db.query(models.Appointment).filter(models.Appointment.doctor_id == int(getattr(current_user, "id"))).all()
-#     else:
-#         appts = db.query(models.Appointment).all()
-
-
-#     result = []
-#     for a in appts:
-#     data = schemas.AppointmentOut.model_validate(a, from_attributes=True)
-#     data.patient_name = a.patient.name if a.patient else None
-#     result.append(data)
-#     return result
-
-    # attach patient_name to each
-    # result = []
-    # for a in appts:
-    #     patient_name = a.patient.name if a.patient else None
-    #     data = schemas.AppointmentOut.from_orm(a)
-    #     data.patient_name = patient_name
-    #     result.append(data)
-    # return result
-
-
-
-# @app.get("/appointments", response_model=List[schemas.AppointmentOut])
+# # -------------------- LIST APPOINTMENTS --------------------
+# # -------------------- LIST APPOINTMENTS --------------------
+# @app.get("/appointments", response_model=list[schemas.AppointmentOut])
 # def list_appointments(db: Session = Depends(get_db),
 #                       current_user: models.User = Depends(get_current_user)):
-#     if (getattr(current_user, "role", "") or "").lower() == "doctor":
-#         appts = db.query(models.Appointment).filter(
-#             models.Appointment.doctor_id == int(getattr(current_user, "id"))
-#         ).all()
-#     else:
-#         appts = db.query(models.Appointment).all()
-
-#     result = []
-#     for a in appts:
-#         data = schemas.AppointmentOut.model_validate(a, from_attributes=True)
-#         data.patient_name = a.patient.name if a.patient else None
-#         data.doctor_name = a.doctor.name if a.doctor else None
-#         result.append(data)
-
-#     return result
-
-
-# @app.get("/appointments", response_model=list[schemas.AppointmentOut])
-# def list_appointments(db: Session = Depends(get_db)):
-#     appts = db.query(models.Appointment).all()
-#     # prefetch doctor names
-#     doctors = {u.id: u.name for u in db.query(models.User).all()}
-
-#     result: list[schemas.AppointmentOut] = []
-#     for a in appts:
-#         result.append(
-#             schemas.AppointmentOut.model_validate(a, from_attributes=True).model_copy(
-#                 update={"doctor_name": doctors.get(a.doctor_id)}
-#             )
+#     try:
+#         rows = (
+#             db.execute(
+#                 select(
+#                     models.Appointment,
+#                     models.Doctor.name.label("doctor_name"),
+#                     models.Company.name.label("company_name"),
+#                 )
+#                 .join(models.Doctor, models.Appointment.doctor_id == models.Doctor.id, isouter=True)
+#                 .join(models.Company, models.Appointment.company_id == models.Company.id, isouter=True)
+#                 .order_by(models.Appointment.appointment_datetime.asc())
+#             ).all()
 #         )
-#     return result
 
-# ---------------- Appointments (fix create + list uses Doctor, not User) ----------------
-from sqlalchemy.exc import IntegrityError
-# -------------------- CREATE APPOINTMENT --------------------
+#         out: List[schemas.AppointmentOut] = []
+#         for appt, doctor_name, company_name in rows:
+#             # Convert the appointment object to dict first
+#             appt_dict = {
+#                 "id": appt.id,
+#                 "doctor_id": appt.doctor_id,
+#                 "company_id": appt.company_id,
+#                 "patient_name": appt.patient_name,
+#                 "appointment_datetime": appt.appointment_datetime,
+#                 "status": appt.status,
+#                 "notes": appt.notes,
+#                 "doctor_name": doctor_name,
+#                 "company_name": company_name,
+#                 # Add any other fields from your Appointment model
+#             }
+#             out.append(schemas.AppointmentOut(**appt_dict))
+        
+#         return out
+#     except Exception as e:
+#         print(f"❌ Error in list_appointments: {str(e)}")
+#         import traceback
+#         traceback.print_exc()
+#         raise HTTPException(status_code=500, detail=str(e))
+
+# # -------------------- UPDATE APPOINTMENT --------------------
+# @app.put("/appointments/{appointment_id}", response_model=schemas.AppointmentOut)
+# def update_appointment(
+#     appointment_id: int,
+#     payload: schemas.AppointmentUpdate,
+#     db: Session = Depends(get_db),
+#     current_user: models.User = Depends(require_role("admin", "receptionist"))
+# ):
+#     appt = db.query(models.Appointment).filter(models.Appointment.id == appointment_id).first()
+#     if not appt:
+#         raise HTTPException(status_code=404, detail="Appointment not found")
+
+#     data = payload.dict(exclude_unset=True)
+#     new_doctor_id = int(data.get("doctor_id", appt.doctor_id))
+#     new_dt = data.get("appointment_datetime", appt.appointment_datetime)
+
+#     clash = db.query(models.Appointment).filter(
+#         models.Appointment.doctor_id == new_doctor_id,
+#         models.Appointment.appointment_datetime == new_dt,
+#         models.Appointment.id != appointment_id,
+#     ).first()
+#     if clash:
+#         raise HTTPException(status_code=409, detail="Slot already booked for this doctor at that time.")
+
+#     for k, v in data.items():
+#         setattr(appt, k, v)
+
+#     try:
+#         db.commit()
+#     except IntegrityError:
+#         db.rollback()
+#         raise HTTPException(status_code=409, detail="Slot already booked for this doctor at that time.")
+#     db.refresh(appt)
+
+#     doctor = db.query(models.Doctor).filter(models.Doctor.id == appt.doctor_id).first()
+#     return schemas.AppointmentOut.model_validate(appt, from_attributes=True).model_copy(
+#         update={"doctor_name": doctor.name if doctor else None}
+#     )
+
+
+
+
+# # -------------------- PARTIAL UPDATE --------------------
+# @app.patch("/appointments/{appointment_id}", response_model=schemas.AppointmentOut)
+# def partial_update_appointment(
+#     appointment_id: int,
+#     payload: schemas.AppointmentUpdate,
+#     db: Session = Depends(get_db),
+#     current_user: models.User = Depends(require_role("admin", "receptionist", "doctor"))
+# ):
+#     appt = db.query(models.Appointment).filter(models.Appointment.id == appointment_id).first()
+#     if not appt:
+#         raise HTTPException(status_code=404, detail="Appointment not found")
+
+#     data = payload.dict(exclude_unset=True)
+#     new_doctor_id = int(data.get("doctor_id", appt.doctor_id))
+#     new_dt = data.get("appointment_datetime", appt.appointment_datetime)
+
+#     clash = db.query(models.Appointment).filter(
+#         models.Appointment.doctor_id == new_doctor_id,
+#         models.Appointment.appointment_datetime == new_dt,
+#         models.Appointment.id != appointment_id,
+#     ).first()
+#     if clash:
+#         raise HTTPException(status_code=409, detail="Slot already booked for this doctor at that time.")
+
+#     for k, v in data.items():
+#         setattr(appt, k, v)
+
+#     try:
+#         db.commit()
+#     except IntegrityError:
+#         db.rollback()
+#         raise HTTPException(status_code=409, detail="Slot already booked for this doctor at that time.")
+#     db.refresh(appt)
+
+#     doctor = db.query(models.Doctor).filter(models.Doctor.id == appt.doctor_id).first()
+#     return schemas.AppointmentOut.model_validate(appt, from_attributes=True).model_copy(
+#         update={"doctor_name": doctor.name if doctor else None}
+#     )
+
+#...................appointments...................
 @app.post("/appointments", response_model=schemas.AppointmentOut, status_code=status.HTTP_201_CREATED)
 def create_appointment(
     payload: schemas.AppointmentCreate,
@@ -595,6 +628,7 @@ def create_appointment(
     # ✅ Determine patient ID and name
     patient_id = payload.patient_id
     patient_name = payload.patient_name
+    patient_contact = payload.patient_contact  # <-- NEW
 
     # If only patient_id is given, fetch the name from patients table
     if patient_id and not patient_name:
@@ -602,19 +636,23 @@ def create_appointment(
         if not patient:
             raise HTTPException(status_code=404, detail="Patient not found")
         patient_name = patient.name
+        # Optional (only if your Patient has a contact field):
+        # if not patient_contact and getattr(patient, "contact", None):
+        #     patient_contact = patient.contact
 
     # ✅ Create appointment
     appt = models.Appointment(
         patient_id=patient_id,
         patient_name=patient_name,
+        patient_contact=patient_contact,                 # <-- NEW
         doctor_id=payload.doctor_id,
         appointment_datetime=payload.appointment_datetime,
         status=payload.status,
         notes=payload.notes,
+        company_id=payload.company_id                    # <-- NEW (you were ignoring this)
     )
 
     db.add(appt)
-    
     try:
         db.commit()
     except IntegrityError:
@@ -624,43 +662,49 @@ def create_appointment(
 
     # ✅ Fetch doctor name
     doctor = db.query(models.Doctor).filter(models.Doctor.id == appt.doctor_id).first()
-    # print("Doctor:", doctor)
-    # print("Appointment:", appt)
-    # print("Doctor name to update:", doctor.name if doctor else None)
     return schemas.AppointmentOut.model_validate(appt, from_attributes=True).model_copy(
         update={"doctor_name": doctor.name if doctor else None}
     )
-    # appt_out = schemas.AppointmentOut.model_validate(appt, from_attributes=True)
-    # appt.doctor_name = doctor.name if doctor else None
-    # print(appt)
-    # return appt
 
-
-
-
-# -------------------- LIST APPOINTMENTS --------------------
 @app.get("/appointments", response_model=list[schemas.AppointmentOut])
 def list_appointments(db: Session = Depends(get_db),
                       current_user: models.User = Depends(get_current_user)):
-    rows = (
-        db.execute(
-            select(
-                models.Appointment,
-                models.Doctor.name.label("doctor_name"),
-            ).join(models.Doctor, models.Appointment.doctor_id == models.Doctor.id, isouter=True)
-             .order_by(models.Appointment.appointment_datetime.asc())
-        ).all()
-    )
-
-    out: List[schemas.AppointmentOut] = []
-    for appt, doctor_name in rows:
-        out.append(
-            schemas.AppointmentOut.model_validate(appt, from_attributes=True).model_copy(
-                update={"doctor_name": doctor_name}
-            )
+    try:
+        rows = (
+            db.execute(
+                select(
+                    models.Appointment,
+                    models.Doctor.name.label("doctor_name"),
+                    models.Company.name.label("company_name"),
+                )
+                .join(models.Doctor, models.Appointment.doctor_id == models.Doctor.id, isouter=True)
+                .join(models.Company, models.Appointment.company_id == models.Company.id, isouter=True)
+                .order_by(models.Appointment.appointment_datetime.asc())
+            ).all()
         )
-    return out
-# -------------------- UPDATE APPOINTMENT --------------------
+
+        out: List[schemas.AppointmentOut] = []
+        for appt, doctor_name, company_name in rows:
+            appt_dict = {
+                "id": appt.id,
+                "doctor_id": appt.doctor_id,
+                "company_id": appt.company_id,
+                "patient_name": appt.patient_name,
+                "patient_contact": appt.patient_contact,     # <-- NEW
+                "appointment_datetime": appt.appointment_datetime,
+                "status": appt.status,
+                "notes": appt.notes,
+                "doctor_name": doctor_name,
+                "company_name": company_name,
+            }
+            out.append(schemas.AppointmentOut(**appt_dict))
+        return out
+    except Exception as e:
+        print(f"❌ Error in list_appointments: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.put("/appointments/{appointment_id}", response_model=schemas.AppointmentOut)
 def update_appointment(
     appointment_id: int,
@@ -668,14 +712,17 @@ def update_appointment(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(require_role("admin", "receptionist"))
 ):
+    # Fetch appointment
     appt = db.query(models.Appointment).filter(models.Appointment.id == appointment_id).first()
     if not appt:
         raise HTTPException(status_code=404, detail="Appointment not found")
 
+    # Extract new values
     data = payload.dict(exclude_unset=True)
     new_doctor_id = int(data.get("doctor_id", appt.doctor_id))
     new_dt = data.get("appointment_datetime", appt.appointment_datetime)
 
+    # Prevent double-booking
     clash = db.query(models.Appointment).filter(
         models.Appointment.doctor_id == new_doctor_id,
         models.Appointment.appointment_datetime == new_dt,
@@ -684,25 +731,26 @@ def update_appointment(
     if clash:
         raise HTTPException(status_code=409, detail="Slot already booked for this doctor at that time.")
 
-    for k, v in data.items():
-        setattr(appt, k, v)
+    # Update all fields dynamically (includes patient_contact)
+    for key, value in data.items():
+        setattr(appt, key, value)
 
+    # Commit
     try:
         db.commit()
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="Slot already booked for this doctor at that time.")
+
     db.refresh(appt)
 
+    # Add doctor name to response
     doctor = db.query(models.Doctor).filter(models.Doctor.id == appt.doctor_id).first()
     return schemas.AppointmentOut.model_validate(appt, from_attributes=True).model_copy(
         update={"doctor_name": doctor.name if doctor else None}
     )
 
 
-
-
-# -------------------- PARTIAL UPDATE --------------------
 @app.patch("/appointments/{appointment_id}", response_model=schemas.AppointmentOut)
 def partial_update_appointment(
     appointment_id: int,
@@ -710,14 +758,17 @@ def partial_update_appointment(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(require_role("admin", "receptionist", "doctor"))
 ):
+    # Fetch appointment
     appt = db.query(models.Appointment).filter(models.Appointment.id == appointment_id).first()
     if not appt:
         raise HTTPException(status_code=404, detail="Appointment not found")
 
+    # Extract changed fields only
     data = payload.dict(exclude_unset=True)
     new_doctor_id = int(data.get("doctor_id", appt.doctor_id))
     new_dt = data.get("appointment_datetime", appt.appointment_datetime)
 
+    # Prevent doctor double-booking
     clash = db.query(models.Appointment).filter(
         models.Appointment.doctor_id == new_doctor_id,
         models.Appointment.appointment_datetime == new_dt,
@@ -726,9 +777,11 @@ def partial_update_appointment(
     if clash:
         raise HTTPException(status_code=409, detail="Slot already booked for this doctor at that time.")
 
-    for k, v in data.items():
-        setattr(appt, k, v)
+    # Apply only provided fields (includes patient_contact automatically)
+    for key, value in data.items():
+        setattr(appt, key, value)
 
+    # Commit and refresh
     try:
         db.commit()
     except IntegrityError:
@@ -736,12 +789,11 @@ def partial_update_appointment(
         raise HTTPException(status_code=409, detail="Slot already booked for this doctor at that time.")
     db.refresh(appt)
 
+    # Include doctor name in response
     doctor = db.query(models.Doctor).filter(models.Doctor.id == appt.doctor_id).first()
     return schemas.AppointmentOut.model_validate(appt, from_attributes=True).model_copy(
         update={"doctor_name": doctor.name if doctor else None}
     )
-
-
 
 
 
@@ -761,39 +813,6 @@ def todays_appointments(db: Session = Depends(get_db)):
 
 
 # ---------------- Doctors ----------------
-# @app.post("/doctors", response_model=DoctorOut, status_code=status.HTTP_201_CREATED)
-# def create_doctor(payload: DoctorCreate, db: Session = Depends(get_db),
-#                   current_user: models.User = Depends(require_role("admin"))):
-#     doctor = models.Doctor(name=payload.name, qualifications=payload.qualifications)
-#     db.add(doctor)
-#     db.commit()
-#     db.refresh(doctor)
-#     return doctor
-
-
-
-# @app.put("/doctors/{doctor_id}", response_model=schemas.DoctorOut)
-# def update_doctor(
-#     doctor_id: int,
-#     payload: schemas.DoctorCreate,
-#     db: Session = Depends(get_db),
-#     current_user: models.User = Depends(require_role("admin"))
-# ):
-#     doctor = db.query(models.Doctor).filter(models.Doctor.id == doctor_id).first()
-#     if not doctor:
-#         raise HTTPException(status_code=404, detail="Doctor not found")
-
-#     # Update fields
-#     doctor.name = payload.name  # type: ignore
-#     doctor.qualifications = payload.qualifications  # type: ignore
-
-#     db.commit()
-#     db.refresh(doctor)
-#     return doctor
-
-# @app.get("/doctors", response_model=List[DoctorOut])
-# def list_doctors(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-#     return db.query(models.Doctor).all()
 
 
 
@@ -899,11 +918,6 @@ def create_expense(payload: ExpenseCreate, db: Session = Depends(get_db),
     return expense
 
 
-# @app.get("/expenses", response_model=List[ExpenseOut])
-# def list_expenses(db: Session = Depends(get_db),
-#                   current_user: models.User = Depends(get_current_user)):
-#     expenses = db.query(models.Expense).order_by(models.Expense.date.desc()).all()
-#     return expenses
 
 import datetime as dt  # ✅ one import, use dt.datetime everywhere
 
@@ -945,36 +959,11 @@ def delete_expense(expense_id: int, db: Session = Depends(get_db),
     db.commit()
     return
 
-# @app.put("/expenses/{expense_id}", response_model=ExpenseOut)
-# def update_expense(expense_id: int, payload: ExpenseCreate, db: Session = Depends(get_db)):
-#     expense = db.query(models.Expense).filter(models.Expense.id == expense_id).first()
-#     if not expense:
-#         raise HTTPException(status_code=404, detail="Expense not found")
-#     for key, value in payload.dict().items():
-#         setattr(expense, key, value)
-#     db.commit()
-#     db.refresh(expense)
-#     return expense
 
 
 
 # ---------------- Inventory ----------------
 
-
-# @app.post("/inventory", response_model=InventoryOut, status_code=status.HTTP_201_CREATED)
-# def create_inventory(payload: InventoryCreate, db: Session = Depends(get_db),
-#                      current_user: models.User = Depends(get_current_user)):
-#     inventory = models.Inventory(
-#         supplier=payload.supplier,
-#         amount=payload.amount,
-#         description=payload.description,
-#         date=payload.date,
-#         time=payload.time
-#     )
-#     db.add(inventory)
-#     db.commit()
-#     db.refresh(inventory)
-#     return inventory
 
 
 @app.get("/inventory", response_model=List[InventoryOut])
@@ -1025,101 +1014,9 @@ def create_inventory(payload: InventoryCreate,
 # #.......services.........
 
 # # --- Categories ---
-# @router.post("/categories", response_model=schemas.CategoryOut, status_code=status.HTTP_201_CREATED)
-# def create_category(payload: schemas.CategoryCreate, db: Session = Depends(get_db),
-#                     current_user: models.User = Depends(require_role("admin"))):
-#     existing = db.query(models.Category).filter(func.lower(models.Category.name) == payload.name.lower()).first()
-#     if existing:
-#         raise HTTPException(status_code=400, detail="Category already exists")
-#     c = models.Category(name=payload.name)
-#     db.add(c)
-#     db.commit()
-#     db.refresh(c)
-#     return c
-
-# @router.get("/categories", response_model=List[schemas.CategoryOut])
-# def list_categories(db: Session = Depends(get_db)):
-#     return db.query(models.Category).order_by(models.Category.name).all()
-
-# @router.delete("/categories/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
-# def delete_category(category_id: int, db: Session = Depends(get_db),
-#                     current_user: models.User = Depends(require_role("admin"))):
-#     cat = db.query(models.Category).filter(models.Category.id == category_id).first()
-#     if not cat:
-#         raise HTTPException(status_code=404, detail="Category not found")
-#     db.delete(cat)
-#     db.commit()
-#     return
 
 
-# # # --- Services ---
-# @router.post("/services", response_model=schemas.ServiceOut, status_code=status.HTTP_201_CREATED)
-# def create_service(payload: schemas.ServiceCreate, db: Session = Depends(get_db),
-#                    current_user: models.User = Depends(require_role("admin", "receptionist"))):
-#     # ensure category exists
-#     cat = db.query(models.Category).filter(models.Category.id == payload.category_id).first()
-#     if not cat:
-#         raise HTTPException(status_code=404, detail="Category not found")
-#     s = models.Service(
-#         name=payload.name,
-#         price_amount=payload.price_amount,
-#         price_text=payload.price_text,
-#         currency=payload.currency or "PKR",
-#         category_id=payload.category_id,
-#         is_active=True
-#     )
-#     db.add(s)
-#     db.commit()
-#     db.refresh(s)
-#     return s
 
-# @router.get("/services", response_model=List[schemas.ServiceOut])
-# def list_services(db: Session = Depends(get_db),
-#                   category_id: Optional[int] = Query(None, description="Filter by category id"),
-#                   active: Optional[bool] = Query(None),
-#                   q: Optional[str] = Query(None, description="search by name")):
-#     query = db.query(models.Service)
-#     if category_id:
-#         query = query.filter(models.Service.category_id == category_id)
-#     if active is not None:
-#         query = query.filter(models.Service.is_active == active)
-#     if q:
-#         query = query.filter(models.Service.name.ilike(f"%{q}%"))
-#     return query.order_by(models.Service.name).all()
-
-# @router.put("/services/{service_id}", response_model=schemas.ServiceOut)
-# def update_service(service_id: int, payload: schemas.ServiceUpdate, db: Session = Depends(get_db),
-#                    current_user: models.User = Depends(require_role("admin", "receptionist"))):
-#     s = db.query(models.Service).filter(models.Service.id == service_id).first()
-#     if not s:
-#         raise HTTPException(status_code=404, detail="Service not found")
-#     update_data = payload.dict(exclude_unset=True)
-#     for k, v in update_data.items():
-#         setattr(s, k, v)
-#     db.commit()
-#     db.refresh(s)
-#     return s
-
-# @router.patch("/services/{service_id}/toggle_active", response_model=schemas.ServiceOut)
-# def toggle_service(service_id: int, db: Session = Depends(get_db),
-#                    current_user: models.User = Depends(require_role("admin", "receptionist"))):
-#     s = db.query(models.Service).filter(models.Service.id == service_id).first()
-#     if not s:
-#         raise HTTPException(status_code=404, detail="Service not found")
-#     s.is_active = not s.is_active
-#     db.commit()
-#     db.refresh(s)
-#     return s
-
-# @router.delete("/services/{service_id}", status_code=status.HTTP_204_NO_CONTENT)
-# def delete_service(service_id: int, db: Session = Depends(get_db),
-#                    current_user: models.User = Depends(require_role("admin"))):
-#     s = db.query(models.Service).filter(models.Service.id == service_id).first()
-#     if not s:
-#         raise HTTPException(status_code=404, detail="Service not found")
-#     db.delete(s)
-#     db.commit()
-#     return
 
 
 
@@ -1327,6 +1224,91 @@ def delete_invoice(invoice_id: int, db: Session = Depends(get_db),
     db.delete(invoice)
     db.commit()
     return
+
+
+#................... company.............
+
+# ---------------- Companies ----------------
+@app.post("/companies", response_model=CompanyOut, status_code=status.HTTP_201_CREATED)
+def create_company(
+    payload: CompanyCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_role("admin"))
+):
+    # unique (case-insensitive) name check
+    existing = db.query(models.Company).filter(func.lower(models.Company.name) == payload.name.lower()).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Company already exists")
+
+    c = models.Company(
+        name=payload.name.strip(),
+        is_disabled=bool(payload.is_disabled) if payload.is_disabled is not None else False,
+    )
+    db.add(c)
+    db.commit()
+    db.refresh(c)
+    return c
+
+
+@app.get("/companies", response_model=list[CompanyOut])
+def list_companies(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    return db.query(models.Company).order_by(models.Company.name.asc()).all()
+
+
+@app.get("/companies/{company_id}", response_model=CompanyOut)
+def get_company(
+    company_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    c = db.query(models.Company).filter(models.Company.id == company_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return c
+
+
+@app.put("/companies/{company_id}", response_model=CompanyOut)
+def update_company(
+    company_id: int,
+    payload: CompanyUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_role("admin"))
+):
+    c = db.query(models.Company).filter(models.Company.id == company_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    if payload.name and payload.name.strip().lower() != c.name.lower():
+        clash = db.query(models.Company).filter(func.lower(models.Company.name) == payload.name.strip().lower()).first()
+        if clash:
+            raise HTTPException(status_code=400, detail="Company name already in use")
+
+    for k, v in payload.model_dump(exclude_unset=True).items():
+        setattr(c, k, v)
+
+    db.commit()
+    db.refresh(c)
+    return c
+
+
+
+@app.delete("/companies/{company_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_company(
+    company_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_role("admin"))
+):
+    c = db.query(models.Company).filter(models.Company.id == company_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Company not found")
+    db.delete(c)
+    db.commit()
+    return
+
+
 
 @app.get("/")
 def read_root():
